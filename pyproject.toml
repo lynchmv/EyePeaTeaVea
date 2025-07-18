@@ -1,0 +1,31 @@
+[project]
+name = "EyePeaTeaVea"
+version = "1.0.0"
+description = "Stremio addon for user curated playlists from around the globe"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "GPLv3.0"
+authors = [
+    { name = "Michael Lynch", email = "lynchmv+stremio@gmail.com" }
+]
+
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic",
+    "pydantic-settings",
+    "beanie",
+    "motor",
+    "httpx",
+    "m3u-ipytv",
+    "dateparser",
+    "apscheduler",
+    "python-dateutil",
+    "pycryptodome",
+    "gunicorn",
+    "redis[hiredis]",
+]
+
+[tool.uv]
+# This section can be used for uv-specific configurations if needed later.
+

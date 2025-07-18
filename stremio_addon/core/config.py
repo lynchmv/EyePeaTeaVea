@@ -8,11 +8,12 @@ class Settings(BaseSettings):
     """
 
     # --- Application Settings ---
-    addon_name: str = Field("My Playlist Addon", alias="ADDON_NAME")
+    addon_name: str = Field("EyePeaTeaVea", alias="ADDON_NAME")
     logging_level: str = Field("INFO", alias="LOGGING_LEVEL")
 
     # --- Database Settings ---
     mongo_uri: str = Field("mongodb://mongodb:27017/mediafusion", alias="MONGO_URI")
+    redis_url: str = Field("redis://redis:6379", alias="REDIS_URL")
 
     # --- Playlist Parser Settings ---
     # A comma-separated list of M3U playlist URLs to combine and parse.
