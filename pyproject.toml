@@ -1,10 +1,10 @@
 [project]
 name = "EyePeaTeaVea"
 version = "1.0.0"
-description = "Stremio addon for user curated playlists from around the globe"
+description = "Live TV channels and events from user curated playlists"
 readme = "README.md"
 requires-python = ">=3.12"
-license = "GPLv3.0"
+license = "MIT"
 authors = [
     { name = "Michael Lynch", email = "lynchmv+stremio@gmail.com" }
 ]
@@ -24,6 +24,9 @@ dependencies = [
     "pycryptodome",
     "gunicorn",
     "redis[hiredis]",
+    "aiohttp",
+    "aiohttp-socks",
+    "Pillow"
 ]
 
 [tool.uv]

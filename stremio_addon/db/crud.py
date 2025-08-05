@@ -1,27 +1,32 @@
 import logging
 from typing import List
 from beanie.odm.operators.update.general import Set
+from beanie import BulkWriter
 
 from stremio_addon.db import models
 
 async def save_tv_channels(channels: List[models.MediaFusionTVMetaData]):
     """
     Saves a list of TV channels to the database.
-    This function will clear all existing channels before inserting the new ones
-    to ensure the list is always up-to-date.
+    This function will clear all existing channels and then insert the new,
+    de-duplicated list to ensure it is always up-to-date.
     """
     if not channels:
         logging.warning("No TV channels provided to save.")
         return
 
     try:
+        # --- Start of Change: De-duplicate the channel list ---
+        unique_channels = {channel.id: channel for channel in channels}.values()
+        logging.info(f"De-duplicated channel list. Original: {len(channels)}, Unique: {len(unique_channels)}")
+        # --- End of Change ---
+
         logging.info(f"Clearing existing {await models.MediaFusionTVMetaData.count()} TV channels from the database.")
-        # Delete all existing documents in the collection
         await models.MediaFusionTVMetaData.delete_all()
 
-        logging.info(f"Inserting {len(channels)} new TV channels into the database.")
-        # Insert the new list of channels
-        await models.MediaFusionTVMetaData.insert_many(channels)
+        logging.info(f"Inserting {len(unique_channels)} new TV channels into the database.")
+        # Insert the de-duplicated list of channels
+        await models.MediaFusionTVMetaData.insert_many(list(unique_channels))
 
         logging.info("Successfully saved all new TV channels.")
     except Exception as e:
@@ -38,20 +43,14 @@ async def save_live_events(events: List[models.MediaFusionEventsMetaData]):
         return
 
     try:
-        update_operations = []
-        for event in events:
-            # Prepare an "update one" operation with upsert=True
-            op = models.MediaFusionEventsMetaData.find_one({"_id": event.id}).update(
-                Set(event.model_dump(exclude_none=True)), upsert=True
-            )
-            update_operations.append(op)
+        # Use a BulkWriter for efficient upsert operations
+        async with BulkWriter() as writer:
+            for event in events:
+                await models.MediaFusionEventsMetaData.find_one({"_id": event.id}).update(
+                    Set(event.model_dump(exclude_none=True)), upsert=True, bulk_writer=writer
+                )
 
-        logging.info(f"Upserting {len(events)} live events into the database.")
-        # Execute all the upsert operations concurrently
-        await models.MediaFusionEventsMetaData.bulk_write(update_operations)
-
-        logging.info("Successfully saved all live events.")
+        logging.info(f"Successfully saved/updated {len(events)} live events.")
     except Exception as e:
         logging.exception(f"An error occurred while saving live events: {e}")
-
 

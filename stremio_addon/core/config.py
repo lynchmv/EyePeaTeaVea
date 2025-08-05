@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
+from typing import Optional
 
 class Settings(BaseSettings):
     """
@@ -8,8 +9,9 @@ class Settings(BaseSettings):
     """
 
     # --- Application Settings ---
-    addon_name: str = Field("EyePeaTeaVea", alias="ADDON_NAME")
+    addon_name: str = Field("My Playlist Addon", alias="ADDON_NAME")
     logging_level: str = Field("INFO", alias="LOGGING_LEVEL")
+    addon_password: Optional[str] = Field(None, alias="ADDON_PASSWORD")
 
     # --- Database Settings ---
     mongo_uri: str = Field("mongodb://mongodb:27017/mediafusion", alias="MONGO_URI")

@@ -24,6 +24,7 @@ class MediaFusionMetaData(Document):
 class MediaFusionTVMetaData(MediaFusionMetaData):
     """The model for a regular, 24/7 TV channel."""
     streams: List[TVStreams]
+    genres: Optional[List[str]] = Field(default_factory=list) # Added genres to store group-title
 
     class Settings:
         name = "tv_channels" # The name of the MongoDB collection

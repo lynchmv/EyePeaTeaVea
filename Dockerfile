@@ -11,7 +11,6 @@ RUN pip install uv
 COPY pyproject.toml ./
 
 # Install dependencies into a virtual environment at /app/.venv
-# This layer is cached by Docker and will only be re-run if pyproject.toml changes.
 RUN uv venv && . .venv/bin/activate && uv sync
 
 # --- Stage 2: Final Image ---
@@ -31,6 +30,16 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 # Copy the application source code
 COPY ./stremio_addon ./stremio_addon
+COPY ./stremio_addon/static ./stremio_addon/static
+
+# --- Start of HTTPS Changes ---
+# Copy your SSL certificate and key into the container
+COPY ./mediafusion.lynuxss.com.pem /app/cert.pem
+COPY ./mediafusion.lynuxss.com-key.pem /app/key.pem
+
+# Ensure the appuser can read the certificate files
+RUN chown appuser:appuser /app/cert.pem /app/key.pem
+# --- End of HTTPS Changes ---
 
 # Change ownership of the app directory to the non-root user
 RUN chown -R appuser:appuser /app
@@ -41,7 +50,11 @@ USER appuser
 # Expose the port the application will run on
 EXPOSE 8000
 
-# Command to run the application using Gunicorn
-# This is a production-ready web server for Python.
-CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "stremio_addon.api.main:app", "--bind", "0.0.0.0:8000"]
+# --- Updated CMD to enable HTTPS ---
+# Command to run the application using Gunicorn with SSL enabled
+CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", \
+     "stremio_addon.api.main:app", \
+     "--bind", "0.0.0.0:8000", \
+     "--certfile=/app/cert.pem", \
+     "--keyfile=/app/key.pem"]
 
