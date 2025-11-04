@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+redis
+lxml
+python-dotenv
+APScheduler
+requests

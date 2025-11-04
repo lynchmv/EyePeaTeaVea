@@ -1,60 +1,21 @@
-# --- Stage 1: Builder ---
-# This stage installs dependencies into a virtual environment.
-FROM python:3.12-slim as builder
+# Use an official Python runtime as a parent image
+FROM python:3.11-slim-buster
 
+# Set the working directory in the container
 WORKDIR /app
 
-# Install uv, the fast Python package installer
-RUN pip install uv
+# Install any needed packages specified in requirements.txt
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy only the files needed to install dependencies
-COPY pyproject.toml ./
+# Copy the current directory contents into the container at /app
+COPY . .
 
-# Install dependencies into a virtual environment at /app/.venv
-RUN uv venv && . .venv/bin/activate && uv sync
+# Expose the port the app runs on
+EXPOSE 8020
 
-# --- Stage 2: Final Image ---
-# This stage creates the final, lightweight image for running the application.
-FROM python:3.12-slim
+# Define environment variables
+ENV PYTHONUNBUFFERED 1
 
-WORKDIR /app
-
-# Create a non-root user to run the application for better security
-RUN useradd --create-home --shell /bin/bash appuser
-
-# Copy the virtual environment with all dependencies from the builder stage
-COPY --from=builder /app/.venv ./.venv
-
-# Set the PATH to include the virtual environment's bin directory
-ENV PATH="/app/.venv/bin:$PATH"
-
-# Copy the application source code
-COPY ./stremio_addon ./stremio_addon
-COPY ./stremio_addon/static ./stremio_addon/static
-
-# --- Start of HTTPS Changes ---
-# Copy your SSL certificate and key into the container
-COPY ./mediafusion.lynuxss.com.pem /app/cert.pem
-COPY ./mediafusion.lynuxss.com-key.pem /app/key.pem
-
-# Ensure the appuser can read the certificate files
-RUN chown appuser:appuser /app/cert.pem /app/key.pem
-# --- End of HTTPS Changes ---
-
-# Change ownership of the app directory to the non-root user
-RUN chown -R appuser:appuser /app
-
-# Switch to the non-root user
-USER appuser
-
-# Expose the port the application will run on
-EXPOSE 8000
-
-# --- Updated CMD to enable HTTPS ---
-# Command to run the application using Gunicorn with SSL enabled
-CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", \
-     "stremio_addon.api.main:app", \
-     "--bind", "0.0.0.0:8000", \
-     "--certfile=/app/cert.pem", \
-     "--keyfile=/app/key.pem"]
-
+# Run the application
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8020"]

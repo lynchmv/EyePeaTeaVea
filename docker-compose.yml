@@ -1,53 +1,32 @@
+version: '3.8'
+
 services:
-  # This is your main Stremio addon service.
-  addon:
-    # Tells Docker Compose to build the image from the Dockerfile in the current directory.
+  redis:
+    image: redis:7-alpine
+    hostname: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - eyepeateavea_network
+
+  app:
     build: .
     ports:
-      # Maps port 8000 on your computer to port 8000 inside the container.
-      - "8000:8000"
-    env_file:
-      # Loads environment variables from your .env file for configuration.
-      - .env
+      - "8020:8020"
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      HOST_URL: http://localhost:8020
+      # ADDON_PASSWORD: your_addon_password # Uncomment and set in .env for production
     depends_on:
-      # Ensures that the database is started before your addon starts.
-      - mongodb
-    cpus: "0.80"
-    mem_limit: "512M"
-    memswap_limit: "1G"
+      - redis
     networks:
-      - addon-network
-    restart: unless-stopped
+      - eyepeateavea_network
 
-  # This is the MongoDB database service.
-  mongodb:
-    image: mongo:latest
-    volumes:
-      # Persists database data on your host machine, so you don't lose it
-      # when the container is stopped or removed.
-      - mongo-data:/data/db
-    mem_limit: "192M"
-    memswap_limit: "256M"
-    networks:
-      - addon-network
-    restart: unless-stopped
-
-  redis:
-    image: redis:latest
-    volumes:
-      - redis-data:/data
-    mem_limit: "96M"
-    memswap_limit: "128M"
-    networks:
-      - addon-network
-    restart: unless-stopped
-
-# Defines the named volume used by the mongodb service.
 volumes:
-  mongo-data:
-  redis-data:
+  redis_data:
 
-# Defines the network that allows the services to communicate with each other.
 networks:
-  addon-network:
-
+  eyepeateavea_network:
+    driver: bridge
