@@ -21,6 +21,16 @@ class RedisStore:
             self.redis_client.delete(*keys)
             print(f"Cleared {len(keys)} user data entries from Redis.")
 
+    def get(self, key: str) -> bytes | None:
+        """Retrieves a value from Redis by key."""
+        if not self.redis_client: return None
+        return self.redis_client.get(key)
+
+    def set(self, key: str, value: bytes, expiration_time: int | None = None):
+        """Stores a value in Redis with an optional expiration time."""
+        if not self.redis_client: return
+        self.redis_client.set(key, value, ex=expiration_time)
+
     def store_user_data(self, secret_str: str, user_data: UserData):
         """Stores user-specific configuration data in Redis."""
         if not self.redis_client: return

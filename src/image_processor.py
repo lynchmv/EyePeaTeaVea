@@ -45,7 +45,13 @@ def generate_placeholder_image(title: str = "No Logo", width: int = 500, height:
     byte_io.seek(0)
     return byte_io
 
-async def fetch_image_content(url: str) -> bytes:
+async def fetch_image_content(redis_store: RedisStore, url: str) -> bytes:
+    cache_key = f"image_cache:{url}"
+    cached_content = redis_store.get(cache_key)
+    if cached_content:
+        logger.info(f"Returning cached image content for {url}")
+        return cached_content
+
     try:
         async with httpx.AsyncClient() as client:
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"}
@@ -53,7 +59,10 @@ async def fetch_image_content(url: str) -> bytes:
             response.raise_for_status()
             if not response.headers["Content-Type"].lower().startswith("image/"):
                 raise ValueError(f"Unexpected content type: {response.headers['Content-Type']}")
-            return response.content
+            
+            content = response.content
+            redis_store.set(cache_key, content, expiration_time=60*60*24*7) # Cache for 7 days
+            return content
     except httpx.HTTPStatusError as e:
         logger.warning(f"HTTP status error fetching image from {url}: {e}")
         return b''
@@ -76,7 +85,7 @@ async def process_image(redis_store: RedisStore, tvg_id: str, image_url: str, ti
         redis_store.store_processed_image(cache_key, processed_image.getvalue())
         return processed_image
 
-    content = await fetch_image_content(image_url)
+    content = await fetch_image_content(redis_store, image_url)
     if not content:
         return generate_placeholder_image(title, width, height, monochrome)
 
