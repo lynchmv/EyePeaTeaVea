@@ -9,8 +9,8 @@ CONFIGURE_URL = f"{HOST}/configure"
 # You should replace these with your actual M3U and EPG sources,
 # desired cron schedule, and an optional addon password.
 config_data = {
-    "m3u_sources": ["https://raw.githubusercontent.com/BuddyChewChew/buddylive/refs/heads/main/buddylive_v1.m3u"],
-    "epg_sources": ["https://raw.githubusercontent.com/BuddyChewChew/buddylive/refs/heads/main/en/videoall.xml"],
+    "m3u_sources": ["https://tinyurl.com/drewall8"],
+    "epg_sources": ["https://github.com/acidjesuz/EPGTalk/raw/refs/heads/master/US_guide.xml.gz"],
     "parser_schedule_crontab": "0 */6 * * *",
     "host_url": HOST,
     "addon_password": "12DevServer3!"

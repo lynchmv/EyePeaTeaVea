@@ -69,36 +69,13 @@ class Scheduler:
         self.scheduler.remove_all_jobs()
         secret_strs = self.redis_store.get_all_secret_strs()
         logger.info(f"Found {len(secret_strs)} secret_strs for scheduling: {secret_strs}")
-        if not secret_strs:
-            logger.warning("No user configurations found. Scheduler will not start any jobs.")
-            return
-
-        for secret_str in secret_strs:
-            user_data = self.redis_store.get_user_data(secret_str)
-            if user_data:
-                # Schedule M3U parsing
-                self.scheduler.add_job(
-                    self._fetch_and_store_m3u,
-                    CronTrigger.from_crontab(user_data.parser_schedule_crontab),
-                    args=[secret_str, user_data],
-                    id=f"m3u_parser_{secret_str}"
-                )
-                # Schedule EPG parsing
-                self.scheduler.add_job(
-                    self._fetch_and_store_epg,
-                    CronTrigger.from_crontab(user_data.parser_schedule_crontab),
-                    args=[secret_str, user_data],
-                    id=f"epg_parser_{secret_str}"
-                )
-                logger.info(f"Scheduled jobs for secret_str: {secret_str} with cron: {user_data.parser_schedule_crontab}")
-            else:
-                logger.warning(f"Could not retrieve UserData for secret_str: {secret_str}. Skipping scheduling.")
-        
         if not self.scheduler.running:
             self.scheduler.start()
             logger.info("Scheduler started.")
-        else:
-            logger.info("Scheduler already running, jobs updated.")
+        
+        if not secret_strs:
+            logger.warning("No user configurations found. Scheduler will not start any jobs.")
+            return
 
     def stop_scheduler(self):
         self.scheduler.shutdown()

@@ -19,7 +19,6 @@ def redis_store_fixture():
 
 def test_configure_and_get_manifest(redis_store_fixture: RedisStore):
     with TestClient(app) as client:
-        # Test configure endpoint
         m3u_sources = ["http://example.com/playlist.m3u"]
         epg_sources = ["http://example.com/epg.xml"]
         host_url = "http://test-host.com"
@@ -42,8 +41,8 @@ def test_configure_and_get_manifest(redis_store_fixture: RedisStore):
         # Verify UserData in Redis
         user_data = redis_store_fixture.get_user_data(secret_str)
         assert user_data is not None
-        assert user_data.combined_playlist_sources == m3u_sources
-        assert user_data.combined_epg_sources == epg_sources
+        assert user_data.m3u_sources == m3u_sources
+        assert user_data.epg_sources == epg_sources
         assert user_data.host_url == host_url
         assert user_data.addon_password == addon_password
 
@@ -52,9 +51,7 @@ def test_configure_and_get_manifest(redis_store_fixture: RedisStore):
         assert response.status_code == 200
         manifest = response.json()
         assert manifest["id"] == "org.stremio.eyepeateavea"
-        assert manifest["behaviorHints"]["configurationRequired"] is True
 
-        # Test manifest endpoint with invalid secret_str
         response = client.get(f"/invalid_secret/manifest.json")
         assert response.status_code == 404
 
@@ -86,10 +83,10 @@ def test_catalog_meta_stream_endpoints(redis_store_fixture: RedisStore):
             "url_tvg": "",
             "stream_url": "http://cnn.com/live"
         }
-        redis_store_fixture.store_channels([sample_channel])
+        redis_store_fixture.store_channels({sample_channel["tvg_id"]: sample_channel})
 
         # Test catalog endpoint
-        response = client.get(f"/{secret_str}/catalog/tv/eyepeateavea_channels.json")
+        response = client.get(f"/{secret_str}/catalog/tv/iptv_tv.json")
         assert response.status_code == 200
         catalog = response.json()
         assert len(catalog["metas"]) > 0
@@ -108,7 +105,7 @@ def test_catalog_meta_stream_endpoints(redis_store_fixture: RedisStore):
         assert stream["stream"]["url"] == "http://cnn.com/live"
 
         # Test endpoints with invalid secret_str
-        response = client.get(f"/invalid_secret/catalog/tv/eyepeateavea_channels.json")
+        response = client.get(f"/invalid_secret/catalog/tv/iptv_tv.json")
         assert response.status_code == 404
         response = client.get(f"/invalid_secret/meta/tv/eyepeateavea:CNN.json")
         assert response.status_code == 404

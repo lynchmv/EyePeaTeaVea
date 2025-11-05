@@ -3,6 +3,7 @@ import requests
 from datetime import datetime
 import io
 import os
+import gzip
 
 class EPGParser:
     def __init__(self, epg_source: str):
@@ -15,9 +16,13 @@ class EPGParser:
                 return f.read().decode('utf-8')
         else:
             try:
-                response = requests.get(self.epg_source, timeout=30) # Increased timeout for potentially large EPG files
-                response.raise_for_status()  # Raise an HTTPError for bad responses (4xx or 5xx)
-                return response.text
+                response = requests.get(self.epg_source, timeout=30)
+                response.raise_for_status()
+                
+                if self.epg_source.endswith('.gz') or response.headers.get('Content-Encoding') == 'gzip':
+                    return gzip.decompress(response.content).decode('utf-8')
+                else:
+                    return response.text
             except requests.exceptions.RequestException as e:
                 print(f"Error fetching EPG from {self.epg_source}: {e}")
                 return ""

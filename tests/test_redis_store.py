@@ -26,7 +26,7 @@ class TestRedisStore(unittest.TestCase):
             "url_tvg": "",
             "stream_url": "http://cnn.com/live"
         }
-        self.redis_store.store_channels([channel_data])
+        self.redis_store.store_channels({channel_data["tvg_id"]: channel_data})
         retrieved_channel_json = self.redis_store.get_channel("CNN")
         self.assertIsNotNone(retrieved_channel_json)
         retrieved_channel = json.loads(retrieved_channel_json)
@@ -50,7 +50,10 @@ class TestRedisStore(unittest.TestCase):
             "url_tvg": "",
             "stream_url": "http://espn.com/live"
         }
-        self.redis_store.store_channels([channel_data_1, channel_data_2])
+        self.redis_store.store_channels({
+            channel_data_1["tvg_id"]: channel_data_1,
+            channel_data_2["tvg_id"]: channel_data_2
+        })
         all_channels = self.redis_store.get_all_channels()
         self.assertEqual(len(all_channels), 2)
         self.assertIn("CNN", all_channels)
@@ -88,7 +91,7 @@ class TestRedisStore(unittest.TestCase):
             "url_tvg": "",
             "stream_url": "http://cnn.com/live"
         }
-        self.redis_store.store_channels([channel_data])
+        self.redis_store.store_channels({channel_data["tvg_id"]: channel_data})
         self.redis_store.clear_all_data()
         all_channels = self.redis_store.get_all_channels()
         self.assertEqual(len(all_channels), 0)
@@ -96,8 +99,8 @@ class TestRedisStore(unittest.TestCase):
     def test_store_and_get_user_data(self):
         secret_str = generate_secret_str()
         user_data = UserData(
-            combined_playlist_sources=["http://m3u.test/playlist.m3u"],
-            combined_epg_sources=["http://epg.test/epg.xml"],
+            m3u_sources=["http://m3u.test/playlist.m3u"],
+            epg_sources=["http://epg.test/epg.xml"],
             parser_schedule_crontab="0 0 * * *",
             host_url="http://localhost:8020",
             addon_password="test_password"
@@ -105,22 +108,24 @@ class TestRedisStore(unittest.TestCase):
         self.redis_store.store_user_data(secret_str, user_data)
         retrieved_user_data = self.redis_store.get_user_data(secret_str)
         self.assertIsNotNone(retrieved_user_data)
-        self.assertEqual(retrieved_user_data.combined_playlist_sources, user_data.combined_playlist_sources)
+        self.assertEqual(retrieved_user_data.m3u_sources, user_data.m3u_sources)
         self.assertEqual(retrieved_user_data.addon_password, user_data.addon_password)
 
     def test_get_all_secret_strs(self):
         secret_str_1 = generate_secret_str()
         user_data_1 = UserData(
-            combined_playlist_sources=["http://m3u1.test/playlist.m3u"],
-            combined_epg_sources=["http://epg1.test/epg.xml"],
+            m3u_sources=["http://m3u1.test/playlist.m3u"],
+            epg_sources=["http://epg1.test/epg.xml"],
+            parser_schedule_crontab="0 0 * * *",
             host_url="http://localhost:8020"
         )
         self.redis_store.store_user_data(secret_str_1, user_data_1)
 
         secret_str_2 = generate_secret_str()
         user_data_2 = UserData(
-            combined_playlist_sources=["http://m3u2.test/playlist.m3u"],
-            combined_epg_sources=["http://epg2.test/epg.xml"],
+            m3u_sources=["http://m3u2.test/playlist.m3u"],
+            epg_sources=["http://epg2.test/epg.xml"],
+            parser_schedule_crontab="0 0 * * *",
             host_url="http://localhost:8020"
         )
         self.redis_store.store_user_data(secret_str_2, user_data_2)

@@ -10,3 +10,4 @@ pytest
 pytest-asyncio
 anyio
 m3u-ipytv
+Pillow

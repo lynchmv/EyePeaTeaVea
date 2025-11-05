@@ -35,7 +35,7 @@ class RedisStore:
             return UserData.model_validate_json(user_data_json)
         return None
 
-    def store_channels(self, channels: list[dict]):
+    def store_channels(self, channels: dict):
         """Stores M3U channel data in Redis."""
         if not self.redis_client: return
         pipeline = self.redis_client.pipeline()
