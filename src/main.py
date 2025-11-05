@@ -68,7 +68,6 @@ async def configure_addon(
     secret_str = generate_secret_str()
     user_data = UserData(
         m3u_sources=request.m3u_sources,
-        epg_sources=request.epg_sources,
         parser_schedule_crontab=request.parser_schedule_crontab,
         host_url=request.host_url,
         addon_password=request.addon_password
@@ -77,8 +76,6 @@ async def configure_addon(
 
     logger.info(f"Triggering immediate M3U fetch for secret_str: {secret_str}")
     scheduler.trigger_m3u_fetch_for_user(secret_str, user_data)
-    logger.info(f"Triggering immediate EPG fetch for secret_str: {secret_str}")
-    scheduler.trigger_epg_fetch_for_user(secret_str, user_data)
 
     return {"secret_str": secret_str, "message": "Configuration saved successfully. Use this secret_str in your addon URL."}
 
@@ -100,7 +97,7 @@ async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_d
         "id": "org.stremio.eyepeateavea",
         "version": "1.0.0",
         "name": "EyePeaTeaVea",
-        "description": "Stremio addon for M3U playlists and EPG data",
+        "description": "Stremio addon for M3U playlists",
         "logo": f"{HOST_URL}/{secret_str}/icon/logo.png",
         "resources": ["catalog", "meta", "stream"],
         "types": ["tv"],

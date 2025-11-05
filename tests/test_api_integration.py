@@ -18,9 +18,7 @@ def redis_store_fixture():
     return store
 
 def test_configure_and_get_manifest(redis_store_fixture: RedisStore):
-    with TestClient(app) as client:
         m3u_sources = ["http://example.com/playlist.m3u"]
-        epg_sources = ["http://example.com/epg.xml"]
         host_url = "http://test-host.com"
         addon_password = "testpass"
 
@@ -28,7 +26,6 @@ def test_configure_and_get_manifest(redis_store_fixture: RedisStore):
             "/configure",
             json={
                 "m3u_sources": m3u_sources,
-                "epg_sources": epg_sources,
                 "host_url": host_url,
                 "addon_password": addon_password
             }
@@ -42,7 +39,6 @@ def test_configure_and_get_manifest(redis_store_fixture: RedisStore):
         user_data = redis_store_fixture.get_user_data(secret_str)
         assert user_data is not None
         assert user_data.m3u_sources == m3u_sources
-        assert user_data.epg_sources == epg_sources
         assert user_data.host_url == host_url
         assert user_data.addon_password == addon_password
 
@@ -59,7 +55,6 @@ def test_catalog_meta_stream_endpoints(redis_store_fixture: RedisStore):
     with TestClient(app) as client:
         # Configure a user first
         m3u_sources = ["http://example.com/playlist.m3u"]
-        epg_sources = ["http://example.com/epg.xml"]
         host_url = "http://test-host.com"
         addon_password = "testpass"
 
@@ -67,7 +62,6 @@ def test_catalog_meta_stream_endpoints(redis_store_fixture: RedisStore):
             "/configure",
             json={
                 "m3u_sources": m3u_sources,
-                "epg_sources": epg_sources,
                 "host_url": host_url,
                 "addon_password": addon_password
             }

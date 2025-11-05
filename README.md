@@ -1,13 +1,9 @@
 # EyePeaTeaVea
-Stremio addon to curate m3u playlists and EPG from around the globe, supporting multiple user configurations via a unique `secret_str`.
+Stremio addon to curate m3u playlists from around the globe, supporting multiple user configurations via a unique `secret_str`.
 
-The name of the project is EyePeaTeaVea and we need to utilize stremio-dev.lynuxss.com as the URL
-for the manifest. The addon will parse and store m3u playlists (on a schedule) as well as parse and 
-store (refresh every 6 hours) EPG data. This data will then be combined into the Stremio 'Discover' as
-'IPTV' > 'Channels' > {groups}. The {groups} will be created via the 'group-title' in the m3u file.
 
 # Configuration
-This addon uses a `secret_str` to manage individual user configurations, allowing for personalized M3U and EPG sources. Instead of configuring global environment variables for sources, each user generates their own `secret_str`.
+This addon uses a `secret_str` to manage individual user configurations, allowing for personalized M3U sources. Instead of configuring global environment variables for sources, each user generates their own `secret_str`.
 
 ## Initial Setup
 
@@ -19,7 +15,7 @@ This addon uses a `secret_str` to manage individual user configurations, allowin
 
 2.  **Start the Addon**: Run the FastAPI application.
 
-3.  **Configure User Settings**: Access the `/configure` endpoint to set up your M3U and EPG sources. You can do this using a tool like `curl` or a web browser (for a simple GET request, though POST is recommended for security).
+3.  **Configure User Settings**: Access the `/configure` endpoint to set up your M3U sources. You can do this using a tool like `curl` or a web browser (for a simple GET request, though POST is recommended for security).
 
     Example `curl` command to configure:
     ```bash
@@ -27,7 +23,6 @@ This addon uses a `secret_str` to manage individual user configurations, allowin
          -H "Content-Type: application/json" \
          -d '{
                "m3u_sources": ["https://example.com/my_playlist.m3u"],
-               "epg_sources": ["https://example.com/my_epg.xml"],
                "parser_schedule_crontab": "0 */6 * * *",
                "host_url": "http://your-public-addon-url.com",
                "addon_password": "mysecurepassword"

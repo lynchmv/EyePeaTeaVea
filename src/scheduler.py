@@ -6,7 +6,6 @@ from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
 
 from .m3u_parser import M3UParser
-from .epg_parser import EPGParser
 from .redis_store import RedisStore
 from .models import UserData
 
@@ -34,35 +33,6 @@ class Scheduler:
     def trigger_m3u_fetch_for_user(self, secret_str: str, user_data: UserData):
         self._fetch_and_store_m3u(secret_str, user_data)
 
-    def _fetch_and_store_epg(self, secret_str: str, user_data: UserData):
-        logger.info(f"[{secret_str}] Fetching and parsing EPG data...")
-        all_programs = []
-        for source in user_data.epg_sources:
-            epg_parser = EPGParser(source)
-            # EPGParser returns (channels, programs), we only need programs here
-            _, programs = epg_parser.parse()
-            all_programs.extend(programs)
-
-        if all_programs:
-            # Group programs by channel for efficient storage
-            programs_by_channel = {}
-            for program in all_programs:
-                channel_id = program.get("channel")
-                if channel_id:
-                    if channel_id not in programs_by_channel:
-                        programs_by_channel[channel_id] = []
-                    programs_by_channel[channel_id].append(program)
-            
-            for channel_id, programs in programs_by_channel.items():
-                # Store programs associated with the secret_str
-                # Similar to channels, this would need to be prefixed.
-                self.redis_store.store_programs(programs)
-            logger.info(f"[{secret_str}] Stored EPG data for {len(programs_by_channel)} channels.")
-        else:
-            logger.info(f"[{secret_str}] No EPG data to store.")
-
-    def trigger_epg_fetch_for_user(self, secret_str: str, user_data: UserData):
-        self._fetch_and_store_epg(secret_str, user_data)
 
     def start_scheduler(self):
         logger.info("Scheduler start_scheduler method called.")

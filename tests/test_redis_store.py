@@ -59,28 +59,6 @@ class TestRedisStore(unittest.TestCase):
         self.assertIn("CNN", all_channels)
         self.assertIn("ESPN", all_channels)
 
-    def test_store_and_get_programs(self):
-        program_data_1 = {
-            "start": "20251104100000 +0000",
-            "stop": "20251104110000 +0000",
-            "channel": "CNN",
-            "title": "CNN News",
-            "desc": "Daily news update",
-            "category": "News"
-        }
-        program_data_2 = {
-            "start": "20251104110000 +0000",
-            "stop": "20251104120000 +0000",
-            "channel": "CNN",
-            "title": "CNN Special",
-            "desc": "Special report",
-            "category": "News"
-        }
-        self.redis_store.store_programs([program_data_1, program_data_2])
-        retrieved_programs = self.redis_store.get_programs_for_channel("CNN")
-        self.assertEqual(len(retrieved_programs), 2)
-        self.assertEqual(retrieved_programs[0]["title"], "CNN News")
-        self.assertEqual(retrieved_programs[1]["title"], "CNN Special")
 
     def test_clear_all_data(self):
         channel_data = {
@@ -100,7 +78,6 @@ class TestRedisStore(unittest.TestCase):
         secret_str = generate_secret_str()
         user_data = UserData(
             m3u_sources=["http://m3u.test/playlist.m3u"],
-            epg_sources=["http://epg.test/epg.xml"],
             parser_schedule_crontab="0 0 * * *",
             host_url="http://localhost:8020",
             addon_password="test_password"
@@ -115,7 +92,6 @@ class TestRedisStore(unittest.TestCase):
         secret_str_1 = generate_secret_str()
         user_data_1 = UserData(
             m3u_sources=["http://m3u1.test/playlist.m3u"],
-            epg_sources=["http://epg1.test/epg.xml"],
             parser_schedule_crontab="0 0 * * *",
             host_url="http://localhost:8020"
         )
@@ -124,7 +100,6 @@ class TestRedisStore(unittest.TestCase):
         secret_str_2 = generate_secret_str()
         user_data_2 = UserData(
             m3u_sources=["http://m3u2.test/playlist.m3u"],
-            epg_sources=["http://epg2.test/epg.xml"],
             parser_schedule_crontab="0 0 * * *",
             host_url="http://localhost:8020"
         )
