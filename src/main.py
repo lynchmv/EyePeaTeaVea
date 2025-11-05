@@ -101,8 +101,8 @@ async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_d
         "logo": f"{HOST_URL}/{secret_str}/icon/logo.png",
         "resources": [
             "catalog",
-            {"name": "meta", "types": ["tv"], "idPrefixes": ["eyepeateavea:"]},
-            {"name": "stream", "types": ["tv"], "idPrefixes": ["eyepeateavea:"]}
+            {"name": "meta", "types": ["tv"], "idPrefixes": ["eyepeateavea"]},
+            {"name": "stream", "types": ["tv"], "idPrefixes": ["eyepeateavea"]}
         ],
         "types": ["tv"],
         "catalogs": [
@@ -212,7 +212,7 @@ async def get_catalog(
         metas = []
         for channel in filtered_channels:
             meta_obj = {
-                "id": f"eyepeateavea:{channel['tvg_id']}",
+                "id": f"eyepeateavea{channel['tvg_id']}",
                 "type": "tv",
                 "name": channel["tvg_name"],
                 "poster": f"{HOST_URL}/{secret_str}/poster/{channel['tvg_id']}.png",
@@ -222,43 +222,21 @@ async def get_catalog(
                 "description": f"Channel: {channel['tvg_name']} (Group: {channel['group_title']})",
                 "genres": [channel["group_title"]]
             }
-            # For non-search results, include the full video/stream details
-            if not is_search:
-                meta_obj.update({
-                    "runtime": "",
-                    "releaseInfo": "",
-                    "links": [],
-                    "videos": [
-                        {
-                            "id": f"eyepeateavea:{channel['tvg_id']}",
-                            "title": channel["tvg_name"],
-                            "released": datetime.now().strftime("%Y-%m-%d"),
-                            "thumbnail": f"{HOST_URL}/{secret_str}/poster/{channel['tvg_id']}.png",
-                            "streams": [
-                                {
-                                    "name": channel["tvg_name"],
-                                    "description": f"Live stream for {channel['tvg_name']}",
-                                    "url": channel["stream_url"],
-                                    "title": "Live"
-                                }
-                            ]
-                        }
-                    ]
-                })
+
             metas.append(meta_obj)
         return {"metas": metas}
     raise HTTPException(status_code=404, detail="Catalog not found")
 
 @app.get("/{secret_str}/meta/{type}/{id}.json")
 async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = Depends(get_user_data_dependency)):
-    if type == "tv" and id.startswith("eyepeateavea:"):
-        tvg_id = id.split(":")[1]
+    if type == "tv" and id.startswith("eyepeateavea"):
+        tvg_id = id.replace("eyepeateavea", "")
         channel_json = redis_store.get_channel(tvg_id)
         if channel_json:
             channel = json.loads(channel_json)
 
             meta = {
-                "id": f"eyepeateavea:{channel['tvg_id']}",
+                "id": f"eyepeateavea{channel['tvg_id']}",
                 "type": "tv",
                 "name": channel["tvg_name"],
                 "poster": f"{HOST_URL}/{secret_str}/poster/{channel['tvg_id']}.png",
@@ -270,29 +248,16 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
                 "genres": [channel["group_title"]],
                 "runtime": "",
                 "releaseInfo": "",
-                "links": [],
-                "videos": [
-                    {
-                        "id": f"eyepeateavea:{channel['tvg_id']}",
-                        "title": channel["tvg_name"],
-                        "released": datetime.now().strftime("%Y-%m-%d"),
-                        "thumbnail": f"{HOST_URL}/{secret_str}/poster/{channel['tvg_id']}.png",
-                        "streams": [
-                            {
-                                "url": channel["stream_url"],
-                                "title": "Live"
-                            }
-                        ]
-                    }
-                ]
+                "links": []
             }
             return {"meta": meta}
     raise HTTPException(status_code=404, detail="Meta not found")
 
 @app.get("/{secret_str}/stream/{type}/{id}.json")
 async def get_stream(secret_str: str, type: str, id: str, user_data: UserData = Depends(get_user_data_dependency)):
-    if type == "tv" and id.startswith("eyepeateavea:"):
-        tvg_id = id.split(":")[1]
+    logger.info(f"Stream endpoint accessed for secret_str: {secret_str}, type: {type}, id: {id}")
+    if type == "tv" and id.startswith("eyepeateavea"):
+        tvg_id = id.replace("eyepeateavea", "")
         channel_json = redis_store.get_channel(tvg_id)
         if channel_json:
             channel = json.loads(channel_json)
