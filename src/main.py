@@ -131,7 +131,7 @@ async def get_processed_poster(secret_str: str, tvg_id: str, user_data: UserData
         raise HTTPException(status_code=404, detail="Channel not found")
     channel = json.loads(channel_json)
     image_url = channel["tvg_logo"]
-    processed_image_bytes = await process_image(image_url, channel["tvg_name"])
+    processed_image_bytes = await process_image(redis_store, tvg_id, image_url, channel["tvg_name"])
     if not processed_image_bytes.getvalue():
         raise HTTPException(status_code=404, detail="Image processing failed or image not found")
     return Response(content=processed_image_bytes.getvalue(), media_type="image/jpeg")

@@ -3,6 +3,7 @@ import httpx
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 import logging
+from .redis_store import RedisStore
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +46,15 @@ def generate_no_logo_image(title: str = "No Logo") -> BytesIO:
 async def fetch_image_content(url: str) -> bytes:
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=10, follow_redirects=True)
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"}
+            response = await client.get(url, headers=headers, timeout=10, follow_redirects=True)
             response.raise_for_status()
             if not response.headers["Content-Type"].lower().startswith("image/"):
                 raise ValueError(f"Unexpected content type: {response.headers['Content-Type']}")
             return response.content
+    except httpx.HTTPStatusError as e:
+        logger.warning(f"HTTP status error fetching image from {url}: {e}")
+        return b''
     except httpx.RequestError as e:
         logger.warning(f"Error fetching image from {url}: {e}")
         return b''
@@ -57,10 +62,18 @@ async def fetch_image_content(url: str) -> bytes:
         logger.warning(f"Error fetching image from {url}: {e}")
         return b''
 
-async def process_image(image_url: str, title: str = "No Title") -> BytesIO:
+async def process_image(redis_store: RedisStore, tvg_id: str, image_url: str, title: str = "No Title") -> BytesIO:
+    # Check cache first
+    cached_image = redis_store.get_processed_image(tvg_id)
+    if cached_image:
+        logger.info(f"Returning cached image for {tvg_id}")
+        return BytesIO(cached_image)
+
     # Check for the generic placeholder URL first
     if image_url == GENERIC_PLACEHOLDER_URL:
-        return generate_no_logo_image(title)
+        processed_image = generate_no_logo_image(title)
+        redis_store.store_processed_image(tvg_id, processed_image.getvalue())
+        return processed_image
 
     content = await fetch_image_content(image_url)
     if not content:
@@ -94,10 +107,14 @@ async def process_image(image_url: str, title: str = "No Title") -> BytesIO:
         byte_io = BytesIO()
         background.save(byte_io, "JPEG", quality=85)
         byte_io.seek(0)
+        redis_store.store_processed_image(tvg_id, byte_io.getvalue())
         return byte_io
     except UnidentifiedImageError:
-        logger.warning(f"Cannot identify image from provided content for URL: {image_url}")
-        return generate_no_logo_image(title) # Return generated image on error
+        processed_image = generate_no_logo_image(title)
+        redis_store.store_processed_image(tvg_id, processed_image.getvalue())
+        return processed_image
     except Exception as e:
         logger.error(f"Error processing image for URL: {image_url} - {e}")
-        return generate_no_logo_image(title) # Return generated image on error
+        processed_image = generate_no_logo_image(title)
+        redis_store.store_processed_image(tvg_id, processed_image.getvalue())
+        return processed_image

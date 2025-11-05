@@ -104,6 +104,19 @@ class RedisStore:
         keys = self.redis_client.keys("user_data:*")
         return [key.decode('utf-8').replace("user_data:", "") for key in keys]
 
+    def store_processed_image(self, tvg_id: str, image_bytes: bytes):
+        """Stores processed image bytes in Redis."""
+        if not self.redis_client: return
+        # Store with an expiration time (e.g., 7 days) to prevent Redis from filling up
+        self.redis_client.setex(f"processed_image:{tvg_id}", 60 * 60 * 24 * 7, image_bytes)
+
+    def get_processed_image(self, tvg_id: str) -> bytes | None:
+        """Retrieves processed image bytes from Redis."""
+        if not self.redis_client: return None
+        image_data = self.redis_client.get(f"processed_image:{tvg_id}")
+        return image_data
+
+
 if __name__ == "__main__":
     # Example Usage
     redis_store = RedisStore("redis://localhost:6379/0")
