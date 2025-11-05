@@ -1,3 +1,6 @@
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import unittest
 import pytest
 from fastapi.testclient import TestClient
@@ -18,6 +21,7 @@ def redis_store_fixture():
     return store
 
 def test_configure_and_get_manifest(redis_store_fixture: RedisStore):
+    with TestClient(app) as client:
         m3u_sources = ["http://example.com/playlist.m3u"]
         host_url = "http://test-host.com"
         addon_password = "testpass"
@@ -84,17 +88,17 @@ def test_catalog_meta_stream_endpoints(redis_store_fixture: RedisStore):
         assert response.status_code == 200
         catalog = response.json()
         assert len(catalog["metas"]) > 0
-        assert catalog["metas"][0]["id"] == "eyepeateavea:CNN"
+        assert catalog["metas"][0]["id"] == "eyepeateaveaCNN"
 
         # Test meta endpoint
-        response = client.get(f"/{secret_str}/meta/tv/eyepeateavea:CNN.json")
+        response = client.get(f"/{secret_str}/meta/tv/eyepeateaveaCNN.json")
         assert response.status_code == 200
         meta = response.json()
         assert meta["meta"]["name"] == "CNN"
         assert "thumbnail" in meta["meta"]
 
         # Test stream endpoint
-        response = client.get(f"/{secret_str}/stream/tv/eyepeateavea:CNN.json")
+        response = client.get(f"/{secret_str}/stream/tv/eyepeateaveaCNN.json")
         assert response.status_code == 200
         stream = response.json()
         assert stream["streams"][0]["url"] == "http://cnn.com/live"
