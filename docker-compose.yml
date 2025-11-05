@@ -5,7 +5,7 @@ services:
     image: redis:7-alpine
     hostname: redis
     ports:
-      - "6379:6379"
+      - "6381:6379"
     volumes:
       - redis_data:/data
     networks:
@@ -17,7 +17,7 @@ services:
       - "8020:8020"
     environment:
       REDIS_URL: redis://redis:6379/0
-      HOST_URL: http://localhost:8020
+      HOST_URL: http://stremio-dev.lynuxss.com
       # ADDON_PASSWORD: your_addon_password # Uncomment and set in .env for production
     depends_on:
       - redis

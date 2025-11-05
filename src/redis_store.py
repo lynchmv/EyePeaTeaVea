@@ -1,30 +1,46 @@
 import json
 from datetime import datetime
 import redis
+from .models import UserData
 
 class RedisStore:
     def __init__(self, redis_url):
-        self.redis_client = redis.from_url(redis_url)
-
-    def _connect_redis(self):
-        """Establishes and returns a Redis client connection."""
         try:
-            client = redis.from_url(self.redis_url)
-            client.ping()
-            print("Successfully connected to Redis!")
-            return client
+            self.redis_client = redis.from_url(redis_url)
+            self.redis_client.ping()
+            print(f"Successfully connected to Redis at {redis_url}")
         except redis.exceptions.ConnectionError as e:
-            print(f"Could not connect to Redis: {e}")
-            return None
+            self.redis_client = None
+            print(f"Could not connect to Redis at {redis_url}: {e}")
+
+    def clear_all_user_data(self):
+        if not self.redis_client:
+            return
+        keys = self.redis_client.keys("user_data:*")
+        if keys:
+            self.redis_client.delete(*keys)
+            print(f"Cleared {len(keys)} user data entries from Redis.")
+
+    def store_user_data(self, secret_str: str, user_data: UserData):
+        """Stores user-specific configuration data in Redis."""
+        if not self.redis_client: return
+        self.redis_client.set(f"user_data:{secret_str}", user_data.model_dump_json())
+        print(f"Stored UserData for secret_str: {secret_str}")
+
+    def get_user_data(self, secret_str: str) -> UserData | None:
+        """Retrieves user-specific configuration data from Redis."""
+        if not self.redis_client: return None
+        user_data_json = self.redis_client.get(f"user_data:{secret_str}")
+        if user_data_json:
+            return UserData.model_validate_json(user_data_json)
+        return None
 
     def store_channels(self, channels: list[dict]):
         """Stores M3U channel data in Redis."""
         if not self.redis_client: return
         pipeline = self.redis_client.pipeline()
-        for channel in channels:
-            tvg_id = channel.get("tvg_id")
-            if tvg_id:
-                pipeline.hset("channels", tvg_id, json.dumps(channel))
+        for tvg_id, channel in channels.items():
+            pipeline.hset("channels", tvg_id, json.dumps(channel))
         pipeline.execute()
         print(f"Stored {len(channels)} channels in Redis.")
 
@@ -56,13 +72,12 @@ class RedisStore:
                     # Remove the timezone offset for parsing, then assume UTC
                     dt_obj = datetime.strptime(start_time_str.split(' ')[0], '%Y%m%d%H%M%S')
                     timestamp = int(dt_obj.timestamp())
-                    
+
                     # Store program in a sorted set for the channel, with timestamp as score
                     pipeline.zadd(f"programs:{channel_id}", {json.dumps(program): timestamp})
                 except ValueError as e:
                     print(f"Error parsing program start time {start_time_str}: {e}")
         pipeline.execute()
-        print(f"Stored {len(programs)} programs in Redis.")
 
     def get_programs_for_channel(self, channel_id: str, start_time: int = 0, end_time: int = 253402300799) -> list[dict]:
         """Retrieves programs for a given channel within a time range."""
@@ -78,7 +93,16 @@ class RedisStore:
         # Find all program keys and delete them
         for key in self.redis_client.scan_iter("programs:*"):
             self.redis_client.delete(key)
+        # Find all user_data keys and delete them
+        for key in self.redis_client.scan_iter("user_data:*"):
+            self.redis_client.delete(key)
         print("Cleared all M3U and EPG data from Redis.")
+
+    def get_all_secret_strs(self) -> list[str]:
+        """Retrieves all stored secret_str keys."""
+        if not self.redis_client: return []
+        keys = self.redis_client.keys("user_data:*")
+        return [key.decode('utf-8').replace("user_data:", "") for key in keys]
 
 if __name__ == "__main__":
     # Example Usage

@@ -5,3 +5,8 @@ lxml
 python-dotenv
 APScheduler
 requests
+httpx
+pytest
+pytest-asyncio
+anyio
+m3u-ipytv

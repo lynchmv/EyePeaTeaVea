@@ -1,6 +1,15 @@
 import re
 import requests
 import os
+import hashlib
+from ipytv import playlist
+from ipytv.channel import IPTVAttr
+from urllib.parse import urljoin
+from dotenv import load_dotenv
+
+load_dotenv()
+
+HOST_URL = os.getenv("HOST_URL", "http://localhost:8020")
 
 class M3UParser:
     def __init__(self, m3u_source: str):
@@ -21,38 +30,57 @@ class M3UParser:
                 return ""
 
     def parse(self) -> list[dict]:
-        """Parses M3U content and extracts channel information."""
+        """Parses M3U content using ipytv and extracts channel information."""
         content = self._get_m3u_content()
         if not content:
             return []
 
+        try:
+            iptv_playlist = playlist.loads(content)
+        except Exception as e:
+            print(f"Error loading M3U content with ipytv: {e}")
+            return []
+
         channels = []
-        lines = content.splitlines()
-        channel_info = {}
+        for channel_obj in iptv_playlist:
+            group_title = channel_obj.attributes.get(IPTVAttr.GROUP_TITLE.value, "Other")
 
-        for line in lines:
-            line = line.strip()
-            if line.startswith("#EXTINF"):
-                # Extract attributes from #EXTINF line
-                group_title_match = re.search(r'group-title="([^"]*)"', line)
-                tvg_id_match = re.search(r'tvg-id="([^"]*)"', line)
-                tvg_name_match = re.search(r'tvg-name="([^"]*)"', line)
-                tvg_logo_match = re.search(r'tvg-logo="([^"]*)"', line)
-                url_tvg_match = re.search(r'url-tvg="([^"]*)"', line)
+            tvg_id = channel_obj.attributes.get(IPTVAttr.TVG_ID.value, "")
+            if not tvg_id:
+                # Generate a unique tvg_id if not present
+                unique_identifier = f"{channel_obj.name}_{channel_obj.url}"
+                tvg_id = hashlib.sha256(unique_identifier.encode()).hexdigest()
 
-                channel_info = {
-                    "group_title": group_title_match.group(1) if group_title_match else "Other",
-                    "tvg_id": tvg_id_match.group(1) if tvg_id_match else "",
-                    "tvg_name": tvg_name_match.group(1) if tvg_name_match else "",
-                    "tvg_logo": tvg_logo_match.group(1) if tvg_logo_match else "",
-                    "url_tvg": url_tvg_match.group(1) if url_tvg_match else "",
-                    "stream_url": ""
-                }
-            elif line and not line.startswith("#") and channel_info:
-                # The next non-comment line after #EXTINF is the stream URL
-                channel_info["stream_url"] = line
-                channels.append(channel_info)
-                channel_info = {}  # Reset for the next channel
+            tvg_name = channel_obj.attributes.get(IPTVAttr.TVG_NAME.value, channel_obj.name)
+            if not tvg_name:
+                tvg_name = "Unknown Channel"
+
+            tvg_logo = channel_obj.attributes.get(IPTVAttr.TVG_LOGO.value, "") # Change default to empty string
+
+            # If tvg_logo is empty, try to use a static image based on group_title
+            if not tvg_logo:
+                static_logo_filename = f"{group_title.lower().replace(' ', '-')}.png"
+                static_logo_path = os.path.join("static", static_logo_filename)
+
+                # Check if the static file exists in the local filesystem
+                # Assuming 'static' directory is at the project root
+                if os.path.exists(os.path.join(os.getcwd(), static_logo_path)):
+                    tvg_logo = urljoin(HOST_URL, static_logo_path)
+                else:
+                    tvg_logo = "https://via.placeholder.com/240x135.png?text=No+Logo" # Fallback to generic placeholder
+
+            url_tvg = channel_obj.attributes.get("url-tvg", "")
+            stream_url = channel_obj.url
+
+            channel_info = {
+                "group_title": group_title,
+                "tvg_id": tvg_id,
+                "tvg_name": tvg_name,
+                "tvg_logo": tvg_logo,
+                "url_tvg": url_tvg,
+                "stream_url": stream_url
+            }
+            channels.append(channel_info)
         return channels
 
 if __name__ == "__main__":

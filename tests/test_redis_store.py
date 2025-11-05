@@ -4,11 +4,13 @@ import json
 import redis
 from datetime import datetime
 from src.redis_store import RedisStore
+from src.models import UserData
+from src.utils import generate_secret_str
 
 class TestRedisStore(unittest.TestCase):
 
     def setUp(self):
-        self.redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/1") # Use a different DB for testing
+        self.redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0") # Use a different DB for testing
         self.redis_store = RedisStore(self.redis_url)
         self.redis_store.clear_all_data() # Clear data before each test
 
@@ -90,6 +92,43 @@ class TestRedisStore(unittest.TestCase):
         self.redis_store.clear_all_data()
         all_channels = self.redis_store.get_all_channels()
         self.assertEqual(len(all_channels), 0)
+
+    def test_store_and_get_user_data(self):
+        secret_str = generate_secret_str()
+        user_data = UserData(
+            combined_playlist_sources=["http://m3u.test/playlist.m3u"],
+            combined_epg_sources=["http://epg.test/epg.xml"],
+            parser_schedule_crontab="0 0 * * *",
+            host_url="http://localhost:8020",
+            addon_password="test_password"
+        )
+        self.redis_store.store_user_data(secret_str, user_data)
+        retrieved_user_data = self.redis_store.get_user_data(secret_str)
+        self.assertIsNotNone(retrieved_user_data)
+        self.assertEqual(retrieved_user_data.combined_playlist_sources, user_data.combined_playlist_sources)
+        self.assertEqual(retrieved_user_data.addon_password, user_data.addon_password)
+
+    def test_get_all_secret_strs(self):
+        secret_str_1 = generate_secret_str()
+        user_data_1 = UserData(
+            combined_playlist_sources=["http://m3u1.test/playlist.m3u"],
+            combined_epg_sources=["http://epg1.test/epg.xml"],
+            host_url="http://localhost:8020"
+        )
+        self.redis_store.store_user_data(secret_str_1, user_data_1)
+
+        secret_str_2 = generate_secret_str()
+        user_data_2 = UserData(
+            combined_playlist_sources=["http://m3u2.test/playlist.m3u"],
+            combined_epg_sources=["http://epg2.test/epg.xml"],
+            host_url="http://localhost:8020"
+        )
+        self.redis_store.store_user_data(secret_str_2, user_data_2)
+
+        all_secret_strs = self.redis_store.get_all_secret_strs()
+        self.assertEqual(len(all_secret_strs), 2)
+        self.assertIn(secret_str_1, all_secret_strs)
+        self.assertIn(secret_str_2, all_secret_strs)
 
 if __name__ == '__main__':
     unittest.main()

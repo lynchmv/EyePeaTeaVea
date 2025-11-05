@@ -2,11 +2,13 @@ import os
 import redis
 import logging
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
 
-from m3u_parser import M3UParser
-from epg_parser import EPGParser
-from redis_store import RedisStore
+from .m3u_parser import M3UParser
+from .epg_parser import EPGParser
+from .redis_store import RedisStore
+from .models import UserData
 
 load_dotenv()
 
@@ -14,36 +16,33 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-COMBINED_PLAYLIST_SOURCES = os.getenv("COMBINED_PLAYLIST_SOURCES", "").split(",")
-COMBINED_EPG_SOURCES = os.getenv("COMBINED_EPG_SOURCES", "").split(",")
 
 class Scheduler:
     def __init__(self):
         self.redis_store = RedisStore(REDIS_URL)
         self.scheduler = BackgroundScheduler()
 
-    def _fetch_and_store_m3u(self):
-        logger.info("Fetching and parsing M3U data...")
-        all_channels = []
-        for source in COMBINED_PLAYLIST_SOURCES:
-            if source:
-                parser = M3UParser(source)
-                channels = parser.parse()
-                all_channels.extend(channels)
-        if all_channels:
-            self.redis_store.store_channels(all_channels)
-            logger.info(f"Stored {len(all_channels)} channels.")
-        else:
-            logger.info("No M3U data to store.")
+    def _fetch_and_store_m3u(self, secret_str: str, user_data: UserData):
+        all_channels_list = []
+        for source in user_data.m3u_sources:
+            m3u_parser = M3UParser(source)
+            channels_list = m3u_parser.parse()
+            all_channels_list.extend(channels_list)
+        channels_dict = {channel["tvg_id"]: channel for channel in all_channels_list if channel.get("tvg_id")}
+        self.redis_store.store_channels(channels_dict)
 
-    def _fetch_and_store_epg(self):
-        logger.info("Fetching and parsing EPG data...")
+    def trigger_m3u_fetch_for_user(self, secret_str: str, user_data: UserData):
+        self._fetch_and_store_m3u(secret_str, user_data)
+
+    def _fetch_and_store_epg(self, secret_str: str, user_data: UserData):
+        logger.info(f"[{secret_str}] Fetching and parsing EPG data...")
         all_programs = []
-        for source in COMBINED_EPG_SOURCES:
-            if source:
-                parser = EPGParser(source)
-                programs = parser.parse()
-                all_programs.extend(programs)
+        for source in user_data.epg_sources:
+            epg_parser = EPGParser(source)
+            # EPGParser returns (channels, programs), we only need programs here
+            _, programs = epg_parser.parse()
+            all_programs.extend(programs)
+
         if all_programs:
             # Group programs by channel for efficient storage
             programs_by_channel = {}
@@ -55,19 +54,51 @@ class Scheduler:
                     programs_by_channel[channel_id].append(program)
             
             for channel_id, programs in programs_by_channel.items():
-                self.redis_store.store_programs(channel_id, programs)
-            logger.info(f"Stored EPG data for {len(programs_by_channel)} channels.")
+                # Store programs associated with the secret_str
+                # Similar to channels, this would need to be prefixed.
+                self.redis_store.store_programs(programs)
+            logger.info(f"[{secret_str}] Stored EPG data for {len(programs_by_channel)} channels.")
         else:
-            logger.info("No EPG data to store.")
+            logger.info(f"[{secret_str}] No EPG data to store.")
+
+    def trigger_epg_fetch_for_user(self, secret_str: str, user_data: UserData):
+        self._fetch_and_store_epg(secret_str, user_data)
 
     def start_scheduler(self):
-        # Schedule M3U parsing (e.g., every 6 hours)
-        self.scheduler.add_job(self._fetch_and_store_m3u, 'interval', hours=6)
-        # Schedule EPG parsing (e.g., every 1 hour)
-        self.scheduler.add_job(self._fetch_and_store_epg, 'interval', hours=1)
+        logger.info("Scheduler start_scheduler method called.")
+        self.scheduler.remove_all_jobs()
+        secret_strs = self.redis_store.get_all_secret_strs()
+        logger.info(f"Found {len(secret_strs)} secret_strs for scheduling: {secret_strs}")
+        if not secret_strs:
+            logger.warning("No user configurations found. Scheduler will not start any jobs.")
+            return
+
+        for secret_str in secret_strs:
+            user_data = self.redis_store.get_user_data(secret_str)
+            if user_data:
+                # Schedule M3U parsing
+                self.scheduler.add_job(
+                    self._fetch_and_store_m3u,
+                    CronTrigger.from_crontab(user_data.parser_schedule_crontab),
+                    args=[secret_str, user_data],
+                    id=f"m3u_parser_{secret_str}"
+                )
+                # Schedule EPG parsing
+                self.scheduler.add_job(
+                    self._fetch_and_store_epg,
+                    CronTrigger.from_crontab(user_data.parser_schedule_crontab),
+                    args=[secret_str, user_data],
+                    id=f"epg_parser_{secret_str}"
+                )
+                logger.info(f"Scheduled jobs for secret_str: {secret_str} with cron: {user_data.parser_schedule_crontab}")
+            else:
+                logger.warning(f"Could not retrieve UserData for secret_str: {secret_str}. Skipping scheduling.")
         
-        self.scheduler.start()
-        logger.info("Scheduler started.")
+        if not self.scheduler.running:
+            self.scheduler.start()
+            logger.info("Scheduler started.")
+        else:
+            logger.info("Scheduler already running, jobs updated.")
 
     def stop_scheduler(self):
         self.scheduler.shutdown()
