@@ -13,7 +13,7 @@ from .redis_store import RedisStore
 from .models import UserData, ConfigureRequest
 from .utils import generate_secret_str, hash_secret_str
 from .scheduler import Scheduler
-from .image_processor import process_image
+from .image_processor import get_poster, get_background, get_logo, get_icon
 
 load_dotenv()
 
@@ -86,12 +86,7 @@ async def configure_addon(
 async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_data_dependency)):
     logger.info(f"Manifest endpoint accessed for secret_str: {secret_str}")
 
-    # Direct Redis check for 'channels' hash keys
-    redis_channel_keys = redis_store.redis_client.hkeys("channels")
-    logger.info(f"Direct Redis check - 'channels' hash keys: {redis_channel_keys}")
-
     all_channels = redis_store.get_all_channels()
-    logger.info(f"Retrieved all_channels from Redis: {all_channels}")
     unique_group_titles = set()
     for channel_json in all_channels.values():
         try:
@@ -100,14 +95,13 @@ async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_d
                 unique_group_titles.add(channel["group_title"])
         except json.JSONDecodeError as e:
             logger.error(f"Error decoding channel JSON from Redis: {e} - {channel_json}")
-    logger.info(f"Unique group titles extracted: {unique_group_titles}")
 
     manifest = {
         "id": "org.stremio.eyepeateavea",
         "version": "1.0.0",
         "name": "EyePeaTeaVea",
         "description": "Stremio addon for M3U playlists and EPG data",
-        "logo": "https://stremio-dev.lynuxss.com/static/logo.png",
+        "logo": f"{HOST_URL}/{secret_str}/icon/logo.png",
         "resources": ["catalog", "meta", "stream"],
         "types": ["tv"],
         "catalogs": [
@@ -125,16 +119,59 @@ async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_d
     return manifest
 
 @app.get("/{secret_str}/poster/{tvg_id}.png")
-async def get_processed_poster(secret_str: str, tvg_id: str, user_data: UserData = Depends(get_user_data_dependency)):
+async def get_poster_image(secret_str: str, tvg_id: str, user_data: UserData = Depends(get_user_data_dependency)):
     channel_json = redis_store.get_channel(tvg_id)
     if not channel_json:
         raise HTTPException(status_code=404, detail="Channel not found")
     channel = json.loads(channel_json)
     image_url = channel["tvg_logo"]
-    processed_image_bytes = await process_image(redis_store, tvg_id, image_url, channel["tvg_name"])
+    processed_image_bytes = await get_poster(redis_store, tvg_id, image_url, channel["tvg_name"])
     if not processed_image_bytes.getvalue():
         raise HTTPException(status_code=404, detail="Image processing failed or image not found")
     return Response(content=processed_image_bytes.getvalue(), media_type="image/jpeg")
+
+@app.get("/{secret_str}/background/{tvg_id}.png")
+async def get_background_image(secret_str: str, tvg_id: str, user_data: UserData = Depends(get_user_data_dependency)):
+    channel_json = redis_store.get_channel(tvg_id)
+    if not channel_json:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    channel = json.loads(channel_json)
+    image_url = channel["tvg_logo"]
+    processed_image_bytes = await get_background(redis_store, tvg_id, image_url, channel["tvg_name"])
+    if not processed_image_bytes.getvalue():
+        raise HTTPException(status_code=404, detail="Image processing failed or image not found")
+    return Response(content=processed_image_bytes.getvalue(), media_type="image/jpeg")
+
+@app.get("/{secret_str}/logo/{tvg_id}.png")
+async def get_logo_image(secret_str: str, tvg_id: str, user_data: UserData = Depends(get_user_data_dependency)):
+    channel_json = redis_store.get_channel(tvg_id)
+    if not channel_json:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    channel = json.loads(channel_json)
+    image_url = channel["tvg_logo"]
+    processed_image_bytes = await get_logo(redis_store, tvg_id, image_url, channel["tvg_name"])
+    if not processed_image_bytes.getvalue():
+        raise HTTPException(status_code=404, detail="Image processing failed or image not found")
+    return Response(content=processed_image_bytes.getvalue(), media_type="image/jpeg")
+
+@app.get("/{secret_str}/icon/{tvg_id}.png")
+async def get_icon_image(secret_str: str, tvg_id: str, user_data: UserData = Depends(get_user_data_dependency)):
+    # For the manifest icon, we use a static logo. For channel icons, we use the channel's logo.
+    if tvg_id == "logo":
+        image_url = f"{HOST_URL}/static/logo.png"
+        channel_name = "EyePeaTeaVea"
+    else:
+        channel_json = redis_store.get_channel(tvg_id)
+        if not channel_json:
+            raise HTTPException(status_code=404, detail="Channel not found")
+        channel = json.loads(channel_json)
+        image_url = channel["tvg_logo"]
+        channel_name = channel["tvg_name"]
+
+    processed_image_bytes = await get_icon(redis_store, tvg_id, image_url, channel_name)
+    if not processed_image_bytes.getvalue():
+        raise HTTPException(status_code=404, detail="Image processing failed or image not found")
+    return Response(content=processed_image_bytes.getvalue(), media_type="image/png")
 
 @app.get("/{secret_str}/catalog/{type}/{id}.json")
 @app.get("/{secret_str}/catalog/{type}/{id}/{extra_name}={extra_value}.json")
@@ -153,32 +190,24 @@ async def get_catalog(
         for tvg_id, channel_json in channels_data.items():
             channel = json.loads(channel_json)
 
-            # Apply genre filter
             if extra_name == "genre" and extra_value:
                 if channel.get("group_title") != extra_value:
                     continue
 
             filtered_channels.append(channel)
-        
-        # Sort channels alphabetically by tvg_name
+
         filtered_channels.sort(key=lambda x: x.get("tvg_name", "").lower())
 
         metas = []
         for channel in filtered_channels:
-            channel_logo = channel["tvg_logo"]
-            if channel_logo is None or channel_logo.startswith(HOST_URL):
-                display_logo = None
-            else:
-                display_logo = channel_logo
-
             metas.append({
                 "id": f"eyepeateavea:{channel['tvg_id']}",
                 "type": "tv",
                 "name": channel["tvg_name"],
                 "poster": f"{HOST_URL}/{secret_str}/poster/{channel['tvg_id']}.png",
-                "posterShape": "landscape",
-                "background": f"{HOST_URL}/{secret_str}/poster/{channel['tvg_id']}.png",
-                "logo": f"{HOST_URL}/{secret_str}/poster/{channel['tvg_id']}.png",
+                "posterShape": "portrait",
+                "background": f"{HOST_URL}/{secret_str}/background/{channel['tvg_id']}.png",
+                "logo": f"{HOST_URL}/{secret_str}/logo/{channel['tvg_id']}.png",
                 "description": f"Channel: {channel['tvg_name']} (Group: {channel['group_title']})",
                 "genres": [channel["group_title"]],
                 "runtime": "",
@@ -212,20 +241,15 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
         if channel_json:
             channel = json.loads(channel_json)
 
-            channel_logo = channel["tvg_logo"]
-            if channel_logo is None or channel_logo.startswith(HOST_URL):
-                display_logo = None
-            else:
-                display_logo = channel_logo
-
             meta = {
                 "id": f"eyepeateavea:{channel['tvg_id']}",
                 "type": "tv",
                 "name": channel["tvg_name"],
                 "poster": f"{HOST_URL}/{secret_str}/poster/{channel['tvg_id']}.png",
                 "posterShape": "portrait",
-                "background": f"{HOST_URL}/{secret_str}/poster/{channel['tvg_id']}.png",
-                "logo": f"{HOST_URL}/{secret_str}/poster/{channel['tvg_id']}.png",
+                "background": f"{HOST_URL}/{secret_str}/background/{channel['tvg_id']}.png",
+                "logo": f"{HOST_URL}/{secret_str}/logo/{channel['tvg_id']}.png",
+                "thumbnail": f"{HOST_URL}/{secret_str}/icon/{channel['tvg_id']}.png",
                 "description": f"Channel: {channel['tvg_name']} (Group: {channel['group_title']})",
                 "genres": [channel["group_title"]],
                 "runtime": "",
@@ -239,8 +263,6 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
                         "thumbnail": f"{HOST_URL}/{secret_str}/poster/{channel['tvg_id']}.png",
                         "streams": [
                             {
-                                "name": channel["tvg_name"],
-                                "description": f"Live stream for {channel['tvg_name']}",
                                 "url": channel["stream_url"],
                                 "title": "Live"
                             }
@@ -263,6 +285,5 @@ async def get_stream(secret_str: str, type: str, id: str, user_data: UserData = 
                 "description": f"Live stream for {channel['tvg_name']}",
                 "url": channel["stream_url"]
             }
-            return {"stream": stream}
+            return {"streams": [stream]}
     raise HTTPException(status_code=404, detail="Stream not found")
-

@@ -97,13 +97,13 @@ def test_catalog_meta_stream_endpoints(redis_store_fixture: RedisStore):
         assert response.status_code == 200
         meta = response.json()
         assert meta["meta"]["name"] == "CNN"
+        assert "thumbnail" in meta["meta"]
 
         # Test stream endpoint
         response = client.get(f"/{secret_str}/stream/tv/eyepeateavea:CNN.json")
         assert response.status_code == 200
         stream = response.json()
-        assert stream["stream"]["url"] == "http://cnn.com/live"
-
+        assert stream["streams"][0]["url"] == "http://cnn.com/live"
         # Test endpoints with invalid secret_str
         response = client.get(f"/invalid_secret/catalog/tv/iptv_tv.json")
         assert response.status_code == 404
