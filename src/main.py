@@ -99,7 +99,11 @@ async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_d
         "name": "EyePeaTeaVea",
         "description": "Stremio addon for M3U playlists",
         "logo": f"{HOST_URL}/{secret_str}/icon/logo.png",
-        "resources": ["catalog", "meta", "stream"],
+        "resources": [
+            "catalog",
+            {"name": "meta", "types": ["tv"], "idPrefixes": ["eyepeateavea:"]},
+            {"name": "stream", "types": ["tv"], "idPrefixes": ["eyepeateavea:"]}
+        ],
         "types": ["tv"],
         "catalogs": [
             {
@@ -108,7 +112,8 @@ async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_d
                 "name": "IPTV Channels",
                 "extra": [
                     {"name": "skip", "isRequired": False},
-                    {"name": "genre", "isRequired": False, "options": sorted(list(unique_group_titles))}
+                    {"name": "genre", "isRequired": False, "options": sorted(list(unique_group_titles))},
+                    {"name": "search", "isRequired": False}
                 ]
             }
         ]
@@ -184,11 +189,20 @@ async def get_catalog(
         channels_data = redis_store.get_all_channels()
         filtered_channels = []
 
+        # Determine if this is a search or a genre filter
+        is_search = extra_name == "search" and extra_value
+
         for tvg_id, channel_json in channels_data.items():
             channel = json.loads(channel_json)
 
+            # Genre filtering
             if extra_name == "genre" and extra_value:
                 if channel.get("group_title") != extra_value:
+                    continue
+            
+            # Search filtering
+            if is_search:
+                if extra_value.lower() not in channel.get("tvg_name", "").lower():
                     continue
 
             filtered_channels.append(channel)
@@ -197,7 +211,7 @@ async def get_catalog(
 
         metas = []
         for channel in filtered_channels:
-            metas.append({
+            meta_obj = {
                 "id": f"eyepeateavea:{channel['tvg_id']}",
                 "type": "tv",
                 "name": channel["tvg_name"],
@@ -206,27 +220,32 @@ async def get_catalog(
                 "background": f"{HOST_URL}/{secret_str}/background/{channel['tvg_id']}.png",
                 "logo": f"{HOST_URL}/{secret_str}/logo/{channel['tvg_id']}.png",
                 "description": f"Channel: {channel['tvg_name']} (Group: {channel['group_title']})",
-                "genres": [channel["group_title"]],
-                "runtime": "",
-                "releaseInfo": "",
-                "links": [],
-                "videos": [
-                    {
-                        "id": f"eyepeateavea:{channel['tvg_id']}",
-                        "title": channel["tvg_name"],
-                        "released": datetime.now().strftime("%Y-%m-%d"),
-                        "thumbnail": f"{HOST_URL}/{secret_str}/poster/{channel['tvg_id']}.png",
-                        "streams": [
-                            {
-                                "name": channel["tvg_name"],
-                                "description": f"Live stream for {channel['tvg_name']}",
-                                "url": channel["stream_url"],
-                                "title": "Live"
-                            }
-                        ]
-                    }
-                ]
-            })
+                "genres": [channel["group_title"]]
+            }
+            # For non-search results, include the full video/stream details
+            if not is_search:
+                meta_obj.update({
+                    "runtime": "",
+                    "releaseInfo": "",
+                    "links": [],
+                    "videos": [
+                        {
+                            "id": f"eyepeateavea:{channel['tvg_id']}",
+                            "title": channel["tvg_name"],
+                            "released": datetime.now().strftime("%Y-%m-%d"),
+                            "thumbnail": f"{HOST_URL}/{secret_str}/poster/{channel['tvg_id']}.png",
+                            "streams": [
+                                {
+                                    "name": channel["tvg_name"],
+                                    "description": f"Live stream for {channel['tvg_name']}",
+                                    "url": channel["stream_url"],
+                                    "title": "Live"
+                                }
+                            ]
+                        }
+                    ]
+                })
+            metas.append(meta_obj)
         return {"metas": metas}
     raise HTTPException(status_code=404, detail="Catalog not found")
 
