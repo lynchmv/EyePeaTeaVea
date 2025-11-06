@@ -58,7 +58,7 @@ class M3UParser:
             re.IGNORECASE,
         )
         time_pattern = re.compile(
-            r"\d{1,2}:\d{2}(?:\d{2})?\s*(?:AM|PM|ET|EST|EDT|UTC)?", re.IGNORECASE
+            r"\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?\s*(?:ET|EST|EDT|UTC)?\s*=?\s*", re.IGNORECASE
         )
 
         for channel_obj in iptv_playlist:
@@ -82,7 +82,6 @@ class M3UParser:
             event_team2 = None
 
             if is_event:
-                event_title = tvg_name
                 event_sport = group_title
                 
                 # Extract date and time using dateparser
@@ -93,11 +92,21 @@ class M3UParser:
                 except Exception as e:
                     print(f"Error parsing date for event '{tvg_name}': {e}")
 
-                # Extract teams
-                team_match = re.search(r"(?P<team1>.*?)\s(?:@|VS)\s(?P<team2>.*)", tvg_name, re.IGNORECASE)
+                # Clean the event name by removing date/time and the separator
+                cleaned_name = re.sub(date_pattern, '', tvg_name).strip()
+                cleaned_name = re.sub(time_pattern, '', cleaned_name).strip()
+                # Also remove common separators that might be left over
+                cleaned_name = re.sub(r'^\s*=\s*|\s*=\s*$', '', cleaned_name).strip()
+
+
+                # Extract teams from the cleaned name
+                team_match = re.search(r"(?P<team1>.*?)\s(?:@|VS)\s(?P<team2>.*)", cleaned_name, re.IGNORECASE)
                 if team_match:
                     event_team1 = team_match.group("team1").strip()
                     event_team2 = team_match.group("team2").strip()
+                    event_title = f"{event_team1} @ {event_team2}"
+                else:
+                    event_title = cleaned_name # Fallback to the cleaned name
 
             tvg_logo = channel_obj.attributes.get(IPTVAttr.TVG_LOGO.value, "") # Change default to empty string
 

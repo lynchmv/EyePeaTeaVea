@@ -284,10 +284,6 @@ async def get_catalog(
             event_unique_id_suffix = hashlib.sha256(channel["event_title"].encode()).hexdigest()[:10]
             event_id = f"eyepeateavea_event_{channel['tvg_id']}_{event_unique_id_suffix}"
 
-            description = channel["event_title"]
-            if channel.get("event_datetime_full"):
-                description += f" ({channel['event_datetime_full']})"
-
             meta_obj = {
                 "id": event_id,
                 "type": "events",
@@ -296,7 +292,7 @@ async def get_catalog(
                 "posterShape": "portrait",
                 "background": f"{HOST_URL}/{secret_str}/background/{channel['tvg_id']}.png",
                 "logo": f"{HOST_URL}/{secret_str}/logo/{channel['tvg_id']}.png",
-                "description": description,
+                "description": channel["event_title"],
                 "genres": [channel["event_sport"]]
             }
             metas.append(meta_obj)
@@ -319,10 +315,6 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
                 import hashlib
                 current_event_hash_suffix = hashlib.sha256(channel["event_title"].encode()).hexdigest()[:10]
                 if current_event_hash_suffix == event_hash_suffix:
-                    description = channel["event_title"]
-                    if channel.get("event_datetime_full"):
-                        description += f" ({channel['event_datetime_full']})"
-
                     meta = {
                         "id": id,
                         "type": "events",
@@ -331,7 +323,7 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
                         "posterShape": "portrait",
                         "background": f"{HOST_URL}/{secret_str}/background/{tvg_id}.png",
                         "logo": f"{HOST_URL}/{secret_str}/logo/{tvg_id}.png",
-                        "description": description,
+                        "description": channel["event_title"],
                         "genres": [channel["event_sport"]],
                         "runtime": "",
                         "releaseInfo": "",
@@ -373,9 +365,10 @@ async def get_stream(secret_str: str, type: str, id: str, user_data: UserData = 
         channel_json = redis_store.get_channel(tvg_id)
         if channel_json:
             channel = json.loads(channel_json)
+            name = channel["event_title"] if channel.get("is_event") else channel["tvg_name"]
             stream = {
-                "name": channel["tvg_name"],
-                "description": f"Live stream for {channel['tvg_name']}",
+                "name": name,
+                "description": f"Live stream for {name}",
                 "url": channel["stream_url"]
             }
             return {"streams": [stream]}
