@@ -6,6 +6,7 @@ from ipytv import playlist
 from ipytv.channel import IPTVAttr
 from urllib.parse import urljoin
 from dotenv import load_dotenv
+import dateparser
 
 load_dotenv()
 
@@ -52,6 +53,14 @@ class M3UParser:
             return []
 
         channels = []
+        date_pattern = re.compile(
+            r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b[ -]\d{1,2}[, -]\d{4}",
+            re.IGNORECASE,
+        )
+        time_pattern = re.compile(
+            r"\d{1,2}:\d{2}(?:\d{2})?\s*(?:AM|PM|ET|EST|EDT|UTC)?", re.IGNORECASE
+        )
+
         for channel_obj in iptv_playlist:
             group_title = channel_obj.attributes.get(IPTVAttr.GROUP_TITLE.value, "Other")
 
@@ -64,6 +73,31 @@ class M3UParser:
             tvg_name = channel_obj.attributes.get(IPTVAttr.TVG_NAME.value, channel_obj.name)
             if not tvg_name:
                 tvg_name = "Unknown Channel"
+
+            is_event = bool(date_pattern.search(tvg_name) and time_pattern.search(tvg_name))
+            event_title = None
+            event_sport = None
+            event_datetime_full = None
+            event_team1 = None
+            event_team2 = None
+
+            if is_event:
+                event_title = tvg_name
+                event_sport = group_title
+                
+                # Extract date and time using dateparser
+                try:
+                    event_datetime = dateparser.parse(tvg_name, settings={'PREFER_DATES_FROM': 'future'})
+                    if event_datetime:
+                        event_datetime_full = event_datetime.strftime("%Y-%m-%d %H:%M:%S")
+                except Exception as e:
+                    print(f"Error parsing date for event '{tvg_name}': {e}")
+
+                # Extract teams
+                team_match = re.search(r"(?P<team1>.*?)\s(?:@|VS)\s(?P<team2>.*)", tvg_name, re.IGNORECASE)
+                if team_match:
+                    event_team1 = team_match.group("team1").strip()
+                    event_team2 = team_match.group("team2").strip()
 
             tvg_logo = channel_obj.attributes.get(IPTVAttr.TVG_LOGO.value, "") # Change default to empty string
 
@@ -88,16 +122,13 @@ class M3UParser:
                 "tvg_name": tvg_name,
                 "tvg_logo": tvg_logo,
                 "url_tvg": url_tvg,
-                "stream_url": stream_url
+                "stream_url": stream_url,
+                "is_event": is_event,
+                "event_title": event_title,
+                "event_sport": event_sport,
+                "event_datetime_full": event_datetime_full,
+                "event_team1": event_team1,
+                "event_team2": event_team2
             }
             channels.append(channel_info)
         return channels
-
-if __name__ == "__main__":
-    # Example Usage (for testing purposes)
-    # You would typically get this URL from your .env file
-    example_m3u_path = "/home/lynchmv/development/EyePeaTeaVea/example.m3u" # Using local file for testing
-    parser = M3UParser(example_m3u_path)
-    parsed_channels = parser.parse()
-    for channel in parsed_channels:
-        print(channel)

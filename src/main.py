@@ -85,11 +85,14 @@ async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_d
 
     all_channels = redis_store.get_all_channels()
     unique_group_titles = set()
+    unique_event_genres = set()
     for channel_json in all_channels.values():
         try:
             channel = json.loads(channel_json)
             if "group_title" in channel:
                 unique_group_titles.add(channel["group_title"])
+            if channel.get("is_event") and channel.get("event_sport"):
+                unique_event_genres.add(channel["event_sport"])
         except json.JSONDecodeError as e:
             logger.error(f"Error decoding channel JSON from Redis: {e} - {channel_json}")
 
@@ -101,10 +104,10 @@ async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_d
         "logo": f"{HOST_URL}/static/logo.png",
         "resources": [
             "catalog",
-            {"name": "meta", "types": ["tv"], "idPrefixes": ["eyepeateavea"]},
-            {"name": "stream", "types": ["tv"], "idPrefixes": ["eyepeateavea"]}
+            {"name": "meta", "types": ["tv", "events"], "idPrefixes": ["eyepeateavea"]},
+            {"name": "stream", "types": ["tv", "events"], "idPrefixes": ["eyepeateavea"]}
         ],
-        "types": ["tv"],
+        "types": ["tv", "events"],
         "catalogs": [
             {
                 "type": "tv",
@@ -114,6 +117,15 @@ async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_d
                     {"name": "skip", "isRequired": False},
                     {"name": "genre", "isRequired": False, "options": sorted(list(unique_group_titles))},
                     {"name": "search", "isRequired": False}
+                ]
+            },
+            {
+                "type": "events",
+                "id": "iptv_sports_events",
+                "name": "IPTV Sports Events",
+                "extra": [
+                    {"name": "skip", "isRequired": False},
+                    {"name": "genre", "isRequired": False, "options": sorted(list(unique_event_genres))}
                 ]
             }
         ]
@@ -178,15 +190,23 @@ async def get_icon_image(secret_str: str, tvg_id: str, user_data: UserData = Dep
     return Response(content=processed_image_bytes.getvalue(), media_type="image/png")
 
 @app.get("/{secret_str}/catalog/{type}/{id}.json")
-@app.get("/{secret_str}/catalog/{type}/{id}/{extra_name}={extra_value}.json")
+@app.get("/{secret_str}/catalog/{type}/{id}/{extra:path}.json")
 async def get_catalog(
     secret_str: str,
     type: str,
     id: str,
     user_data: UserData = Depends(get_user_data_dependency),
-    extra_name: Optional[str] = None,
-    extra_value: Optional[str] = None
+    extra: Optional[str] = None
 ):
+    extra_name = None
+    extra_value = None
+    if extra:
+        # Parse the extra string, e.g., "genre=Sports" or "search=NHL"
+        parts = extra.split('=', 1)
+        if len(parts) == 2:
+            extra_name = parts[0]
+            extra_value = parts[1]
+
     if type == "tv" and id == "iptv_tv":
         channels_data = redis_store.get_all_channels()
         filtered_channels = []
@@ -206,6 +226,10 @@ async def get_catalog(
             if is_search:
                 if extra_value.lower() not in channel.get("tvg_name", "").lower():
                     continue
+
+            # Skip channels with events
+            if channel.get("is_event"):
+                continue
 
             filtered_channels.append(channel)
 
@@ -227,39 +251,125 @@ async def get_catalog(
 
             metas.append(meta_obj)
         return {"metas": metas}
-    raise HTTPException(status_code=404, detail="Catalog not found")
+    elif type == "events" and id == "iptv_sports_events":
+        channels_data = redis_store.get_all_channels()
+        filtered_events = []
 
-@app.get("/{secret_str}/meta/{type}/{id}.json")
-async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = Depends(get_user_data_dependency)):
-    if type == "tv" and id.startswith("eyepeateavea"):
-        tvg_id = id.replace("eyepeateavea", "")
-        channel_json = redis_store.get_channel(tvg_id)
-        if channel_json:
+        is_search = extra_name == "search" and extra_value
+
+        for tvg_id, channel_json in channels_data.items():
             channel = json.loads(channel_json)
 
-            meta = {
-                "id": f"eyepeateavea{channel['tvg_id']}",
-                "type": "tv",
-                "name": channel["tvg_name"],
+            if not channel.get("is_event"):
+                continue
+
+            # Genre filtering for events
+            if extra_name == "genre" and extra_value:
+                if channel.get("event_sport") != extra_value:
+                    continue
+
+            # Search filtering for events
+            if is_search:
+                if extra_value.lower() not in channel.get("event_title", "").lower():
+                    continue
+
+            filtered_events.append(channel)
+
+        filtered_events.sort(key=lambda x: x.get("event_title", "").lower())
+
+        metas = []
+        for channel in filtered_events:
+            # Generate a unique ID for the event meta
+            import hashlib
+            event_unique_id_suffix = hashlib.sha256(channel["event_title"].encode()).hexdigest()[:10]
+            event_id = f"eyepeateavea_event_{channel['tvg_id']}_{event_unique_id_suffix}"
+
+            description = channel["event_title"]
+            if channel.get("event_datetime_full"):
+                description += f" ({channel['event_datetime_full']})"
+
+            meta_obj = {
+                "id": event_id,
+                "type": "events",
+                "name": channel["event_title"],
                 "poster": f"{HOST_URL}/{secret_str}/poster/{channel['tvg_id']}.png",
                 "posterShape": "portrait",
                 "background": f"{HOST_URL}/{secret_str}/background/{channel['tvg_id']}.png",
                 "logo": f"{HOST_URL}/{secret_str}/logo/{channel['tvg_id']}.png",
-                "thumbnail": f"{HOST_URL}/{secret_str}/icon/{channel['tvg_id']}.png",
-                "description": f"Channel: {channel['tvg_name']} (Group: {channel['group_title']})",
-                "genres": [channel["group_title"]],
-                "runtime": "",
-                "releaseInfo": "",
-                "links": []
+                "description": description,
+                "genres": [channel["event_sport"]]
             }
-            return {"meta": meta}
+            metas.append(meta_obj)
+
+        return {"metas": metas}
+
+    raise HTTPException(status_code=404, detail="Catalog not found")
+
+@app.get("/{secret_str}/meta/{type}/{id}.json")
+async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = Depends(get_user_data_dependency)):
+    if type == "events" and id.startswith("eyepeateavea_event_"):
+        parts = id.split('_')
+        tvg_id = parts[2]
+        event_hash_suffix = parts[3]
+
+        channel_json = redis_store.get_channel(tvg_id)
+        if channel_json:
+            channel = json.loads(channel_json)
+            if channel.get("is_event"):
+                import hashlib
+                current_event_hash_suffix = hashlib.sha256(channel["event_title"].encode()).hexdigest()[:10]
+                if current_event_hash_suffix == event_hash_suffix:
+                    description = channel["event_title"]
+                    if channel.get("event_datetime_full"):
+                        description += f" ({channel['event_datetime_full']})"
+
+                    meta = {
+                        "id": id,
+                        "type": "events",
+                        "name": channel["event_title"],
+                        "poster": f"{HOST_URL}/{secret_str}/poster/{tvg_id}.png",
+                        "posterShape": "portrait",
+                        "background": f"{HOST_URL}/{secret_str}/background/{tvg_id}.png",
+                        "logo": f"{HOST_URL}/{secret_str}/logo/{tvg_id}.png",
+                        "description": description,
+                        "genres": [channel["event_sport"]],
+                        "runtime": "",
+                        "releaseInfo": "",
+                        "links": []
+                    }
+                    return {"meta": meta}
+    elif type == "tv" and id.startswith("eyepeateavea"):
+        tvg_id = id.replace("eyepeateavea", "")
+        channel_json = redis_store.get_channel(tvg_id)
+        if channel_json:
+            channel = json.loads(channel_json)
+            if not channel.get("is_event"):
+                meta = {
+                    "id": id,
+                    "type": "tv",
+                    "name": channel["tvg_name"],
+                    "poster": f"{HOST_URL}/{secret_str}/poster/{tvg_id}.png",
+                    "posterShape": "portrait",
+                    "background": f"{HOST_URL}/{secret_str}/background/{tvg_id}.png",
+                    "logo": f"{HOST_URL}/{secret_str}/logo/{tvg_id}.png",
+                    "description": f"Channel: {channel['tvg_name']} (Group: {channel['group_title']})",
+                    "genres": [channel["group_title"]],
+                    "runtime": "",
+                    "releaseInfo": "",
+                    "links": []
+                }
+                return {"meta": meta}
     raise HTTPException(status_code=404, detail="Meta not found")
 
 @app.get("/{secret_str}/stream/{type}/{id}.json")
 async def get_stream(secret_str: str, type: str, id: str, user_data: UserData = Depends(get_user_data_dependency)):
     logger.info(f"Stream endpoint accessed for secret_str: {secret_str}, type: {type}, id: {id}")
-    if type == "tv" and id.startswith("eyepeateavea"):
-        tvg_id = id.replace("eyepeateavea", "")
+    if (type == "tv" or type == "events") and (id.startswith("eyepeateavea_event_") or id.startswith("eyepeateavea")):
+        if id.startswith("eyepeateavea_event_"):
+            parts = id.split('_')
+            tvg_id = parts[2]
+        else:
+            tvg_id = id.replace("eyepeateavea", "")
         channel_json = redis_store.get_channel(tvg_id)
         if channel_json:
             channel = json.loads(channel_json)
