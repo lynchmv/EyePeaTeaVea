@@ -35,6 +35,16 @@ class M3UParser:
         if not content:
             return []
 
+        # Pre-process content to ensure #EXTM3U is at the beginning
+        extm3u_index = content.find("#EXTM3U")
+        if extm3u_index > 0:
+            # If #EXTM3U is not at the beginning, trim the content
+            content = content[extm3u_index:]
+        elif extm3u_index == -1:
+            # If #EXTM3U is not found at all, it's an invalid M3U
+            print("Error: #EXTM3U tag not found in the playlist content.")
+            return []
+
         try:
             iptv_playlist = playlist.loads(content)
         except Exception as e:

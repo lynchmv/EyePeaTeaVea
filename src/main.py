@@ -4,6 +4,7 @@ import logging
 from fastapi import FastAPI, HTTPException, Response, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from typing import Optional
 from datetime import datetime
 from dotenv import load_dotenv
@@ -56,11 +57,6 @@ async def get_user_data_dependency(secret_str: str) -> UserData:
         raise HTTPException(status_code=404, detail="User configuration not found.")
     return user_data
 
-@app.get("/")
-async def root():
-    logger.info("Root endpoint accessed.")
-    return {"message": "Stremio EyePeaTeaVea Addon"}
-
 @app.post("/configure")
 async def configure_addon(
     request: ConfigureRequest
@@ -98,7 +94,7 @@ async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_d
         "version": "1.0.0",
         "name": "EyePeaTeaVea",
         "description": "Stremio addon for M3U playlists",
-        "logo": f"{HOST_URL}/{secret_str}/icon/logo.png",
+        "logo": f"{HOST_URL}/{secret_str}/static/logo.png",
         "resources": [
             "catalog",
             {"name": "meta", "types": ["tv"], "idPrefixes": ["eyepeateavea"]},
@@ -119,6 +115,8 @@ async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_d
         ]
     }
     return manifest
+
+app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")
 
 @app.get("/{secret_str}/poster/{tvg_id}.png")
 async def get_poster_image(secret_str: str, tvg_id: str, user_data: UserData = Depends(get_user_data_dependency)):
@@ -160,7 +158,7 @@ async def get_logo_image(secret_str: str, tvg_id: str, user_data: UserData = Dep
 async def get_icon_image(secret_str: str, tvg_id: str, user_data: UserData = Depends(get_user_data_dependency)):
     # For the manifest icon, we use a static logo. For channel icons, we use the channel's logo.
     if tvg_id == "logo":
-        image_url = f"{HOST_URL}/static/logo.png"
+        image_url = f"{HOST_URL}/icon/logo.png"
         channel_name = "EyePeaTeaVea"
     else:
         channel_json = redis_store.get_channel(tvg_id)
@@ -199,7 +197,7 @@ async def get_catalog(
             if extra_name == "genre" and extra_value:
                 if channel.get("group_title") != extra_value:
                     continue
-            
+
             # Search filtering
             if is_search:
                 if extra_value.lower() not in channel.get("tvg_name", "").lower():
