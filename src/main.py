@@ -57,6 +57,10 @@ async def get_user_data_dependency(secret_str: str) -> UserData:
         raise HTTPException(status_code=404, detail="User configuration not found.")
     return user_data
 
+@app.get("/")
+async def root():
+    return FileResponse('frontend/index.html')
+
 @app.post("/configure")
 async def configure_addon(
     request: ConfigureRequest
@@ -94,7 +98,7 @@ async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_d
         "version": "1.0.0",
         "name": "EyePeaTeaVea",
         "description": "Stremio addon for M3U playlists",
-        "logo": f"{HOST_URL}/{secret_str}/static/logo.png",
+        "logo": f"{HOST_URL}/static/logo.png",
         "resources": [
             "catalog",
             {"name": "meta", "types": ["tv"], "idPrefixes": ["eyepeateavea"]},
@@ -116,7 +120,7 @@ async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_d
     }
     return manifest
 
-app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")
+app.mount("/frontend", StaticFiles(directory="frontend", html=True), name="frontend")
 
 @app.get("/{secret_str}/poster/{tvg_id}.png")
 async def get_poster_image(secret_str: str, tvg_id: str, user_data: UserData = Depends(get_user_data_dependency)):
