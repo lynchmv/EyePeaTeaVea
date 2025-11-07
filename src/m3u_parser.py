@@ -18,6 +18,127 @@ class M3UParser:
     def __init__(self, m3u_source: str):
         self.m3u_source = m3u_source
 
+    def extract_event_datetime(self, tvg_name: str):
+        """
+        Extract and parse the most relevant datetime from messy TVG-style event strings.
+        Prefers US time zones (EST/EDT > CST/CDT > MST/MDT > PST/PDT > UK/UTC)
+        and returns a UTC-aware datetime for consistency.
+        """
+        import re, dateparser, pytz
+        from datetime import datetime
+
+        s = tvg_name.strip()
+        print(f"\n🟢 Raw event: {tvg_name}")
+
+        # 1️⃣ Handle cases like "= ..." or " - ..."
+        if "=" in s:
+            s = s.split("=")[0].strip()
+            print(f"  ➤ Split on '=' → {s}")
+        elif " - " in s:
+            s = s.split(" - ")[-1].strip()
+            print(f"  ➤ Split on '-' → {s}")
+
+        # 2️⃣ Extract parenthesized multi-timezone portion if present
+        match = re.search(r"\(([^)]*?(EST|EDT|CST|CDT|MST|MDT|PST|PDT|UK|UTC)[^)]*?)\)", s)
+        if match:
+            inner = match.group(1)
+            print(f"  ➤ Found multi-timezone segment: {inner}")
+
+            preferred_zones = ["EST", "EDT", "CST", "CDT", "MST", "MDT", "PST", "PDT", "UK", "UTC"]
+            tz_match = None
+
+            # Split on "/" and pick first segment containing preferred timezone
+            for part in [p.strip() for p in inner.split('/')]:
+                for tz in preferred_zones:
+                    if tz in part:
+                        tz_match = part
+                        print(f"  ➤ Selected preferred tz substring: {tz_match}")
+                        break
+                if tz_match:
+                    break
+
+            if tz_match:
+                s = tz_match
+            else:
+                s = inner.split('/')[0].strip()
+
+        # 3️⃣ Normalize formats like "Nov-06-2025" → "Nov 06 2025"
+        s_before = s
+        s = re.sub(r"([A-Za-z]{3,})-([0-9]{1,2})-([0-9]{4})", r"\1 \2 \3", s)
+        if s != s_before:
+            print(f"  ➤ Normalized date format: {s}")
+
+        # 🆕 Handle cases like "UTC HD" or "UTC SD"
+        s_before = s
+        s = re.sub(r"UTC\s+(HD|SD)\b", "UTC", s)
+        if s != s_before:
+            print(f"  ➤ Cleaned UTC suffix (HD/SD): {s}")
+
+        # LYNCH
+        if re.search(r"\(\d{1,2}:\d{2}", s):
+            s = re.sub("\(\d{1,2}:\d{2}", "\(", s)
+
+        tz_map = {
+            "UK": "UTC",
+            "UTC": "UTC",
+            "EST": "EST",
+            "EDT": "EDT",
+            "CST": "CST",
+            "CDT": "CDT",
+            "MST": "MST",
+            "MDT": "MDT",
+            "PST": "PST",
+            "PDT": "PDT"
+        }
+
+        for tz_abbr, tz_full in tz_map.items():
+            if tz_abbr in s:
+                s = s.replace(tz_abbr, tz_full)
+                print(f"  ➤ Replaced timezone {tz_abbr} → {tz_full}")
+
+        # 🆕 Remove redundant 24-hour times if 12-hour AM/PM exists
+        if re.search(r"\d{1,2}:\d{2} [AP]M", s):
+            s_before = s
+            s = re.sub(r"^\d{1,2}:\d{2}\s+", "", s)
+            if s != s_before:
+                print(f"  ➤ Removed redundant 24-hour time: {s}")
+
+        # 4️⃣ Remove stray characters that confuse parsing
+        s_before = s
+        s = re.sub(r"[^A-Za-z0-9: \-/]", " ", s)
+        if s != s_before:
+            print(f"  ➤ Cleaned stray characters: {s}")
+
+        # 5️⃣ Parse to datetime
+        print(f"  🕓 Parsing candidate string: '{s}'")
+        dt = dateparser.parse(s, settings={'PREFER_DATES_FROM': 'future'})
+
+        if not dt:
+            print(f"  ❌ Failed to parse datetime from: {s}")
+            return None
+
+        print(f"  ✅ Parsed datetime (pre-tz): {dt}")
+
+        # 6️⃣ Ensure timezone awareness and convert to UTC
+        if not dt.tzinfo:
+            if any(tz in s for tz in ["EST", "EDT"]):
+                dt = pytz.timezone("US/Eastern").localize(dt)
+            elif any(tz in s for tz in ["CST", "CDT"]):
+                dt = pytz.timezone("US/Central").localize(dt)
+            elif any(tz in s for tz in ["MST", "MDT"]):
+                dt = pytz.timezone("US/Mountain").localize(dt)
+            elif any(tz in s for tz in ["PST", "PDT"]):
+                dt = pytz.timezone("US/Pacific").localize(dt)
+            elif "UK" in s:
+                dt = pytz.timezone("Europe/London").localize(dt)
+            else:
+                dt = pytz.UTC.localize(dt)
+            print(f"  🕐 Applied timezone: {dt.tzinfo}")
+
+        dt_utc = dt.astimezone(pytz.UTC)
+        print(f"  🌍 Final UTC datetime: {dt_utc}")
+        return dt_utc
+
     def _get_m3u_content(self) -> str:
         """Fetches the content of an M3U playlist from a URL or reads from a local file."""
         if os.path.exists(self.m3u_source):
@@ -85,10 +206,8 @@ class M3UParser:
 
             if is_event:
                 event_sport = group_title
-                
-                # Extract date and time using dateparser
-                date_string = tvg_name.split('=')[0].strip()
-                event_datetime = dateparser.parse(date_string, settings={'PREFER_DATES_FROM': 'future'})
+
+                event_datetime = self.extract_event_datetime(tvg_name)
                 print(f"Parsing event: {tvg_name}, parsed_datetime: {event_datetime}")
                 if event_datetime:
                     # Check if the event is in the past
