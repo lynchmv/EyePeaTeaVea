@@ -90,7 +90,8 @@ async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_d
         try:
             channel = json.loads(channel_json)
             if "group_title" in channel:
-                unique_group_titles.add(channel["group_title"])
+                if not channel.get("is_event"):
+                    unique_group_titles.add(channel["group_title"])
             if channel.get("is_event") and channel.get("event_sport"):
                 unique_event_genres.add(channel["event_sport"])
         except json.JSONDecodeError as e:

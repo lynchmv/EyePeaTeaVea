@@ -27,8 +27,7 @@ class Scheduler:
             m3u_parser = M3UParser(source)
             channels_list = m3u_parser.parse()
             all_channels_list.extend(channels_list)
-        channels_dict = {channel["tvg_id"]: channel for channel in all_channels_list if channel.get("tvg_id")}
-        self.redis_store.store_channels(channels_dict)
+        self.redis_store.store_channels(all_channels_list)
 
     def trigger_m3u_fetch_for_user(self, secret_str: str, user_data: UserData):
         self._fetch_and_store_m3u(secret_str, user_data)
