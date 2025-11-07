@@ -28,21 +28,17 @@ class M3UParser:
         from datetime import datetime
 
         s = tvg_name.strip()
-        print(f"\n🟢 Raw event: {tvg_name}")
 
         # 1️⃣ Handle cases like "= ..." or " - ..."
         if "=" in s:
             s = s.split("=")[0].strip()
-            print(f"  ➤ Split on '=' → {s}")
         elif " - " in s:
             s = s.split(" - ")[-1].strip()
-            print(f"  ➤ Split on '-' → {s}")
 
         # 2️⃣ Extract parenthesized multi-timezone portion if present
         match = re.search(r"\(([^)]*?(EST|EDT|CST|CDT|MST|MDT|PST|PDT|UK|UTC)[^)]*?)\)", s)
         if match:
             inner = match.group(1)
-            print(f"  ➤ Found multi-timezone segment: {inner}")
 
             preferred_zones = ["EST", "EDT", "CST", "CDT", "MST", "MDT", "PST", "PDT", "UK", "UTC"]
             tz_match = None
@@ -52,7 +48,6 @@ class M3UParser:
                 for tz in preferred_zones:
                     if tz in part:
                         tz_match = part
-                        print(f"  ➤ Selected preferred tz substring: {tz_match}")
                         break
                 if tz_match:
                     break
@@ -66,13 +61,11 @@ class M3UParser:
         s_before = s
         s = re.sub(r"([A-Za-z]{3,})-([0-9]{1,2})-([0-9]{4})", r"\1 \2 \3", s)
         if s != s_before:
-            print(f"  ➤ Normalized date format: {s}")
 
         # 🆕 Handle cases like "UTC HD" or "UTC SD"
         s_before = s
         s = re.sub(r"UTC\s+(HD|SD)\b", "UTC", s)
         if s != s_before:
-            print(f"  ➤ Cleaned UTC suffix (HD/SD): {s}")
 
         # LYNCH
         if re.search(r"\(\d{1,2}:\d{2}", s):
@@ -94,30 +87,24 @@ class M3UParser:
         for tz_abbr, tz_full in tz_map.items():
             if tz_abbr in s:
                 s = s.replace(tz_abbr, tz_full)
-                print(f"  ➤ Replaced timezone {tz_abbr} → {tz_full}")
 
         # 🆕 Remove redundant 24-hour times if 12-hour AM/PM exists
         if re.search(r"\d{1,2}:\d{2} [AP]M", s):
             s_before = s
             s = re.sub(r"^\d{1,2}:\d{2}\s+", "", s)
             if s != s_before:
-                print(f"  ➤ Removed redundant 24-hour time: {s}")
 
         # 4️⃣ Remove stray characters that confuse parsing
         s_before = s
         s = re.sub(r"[^A-Za-z0-9: \-/]", " ", s)
         if s != s_before:
-            print(f"  ➤ Cleaned stray characters: {s}")
 
         # 5️⃣ Parse to datetime
-        print(f"  🕓 Parsing candidate string: '{s}'")
         dt = dateparser.parse(s, settings={'PREFER_DATES_FROM': 'future'})
 
         if not dt:
-            print(f"  ❌ Failed to parse datetime from: {s}")
             return None
 
-        print(f"  ✅ Parsed datetime (pre-tz): {dt}")
 
         # 6️⃣ Ensure timezone awareness and convert to UTC
         if not dt.tzinfo:
@@ -133,10 +120,8 @@ class M3UParser:
                 dt = pytz.timezone("Europe/London").localize(dt)
             else:
                 dt = pytz.UTC.localize(dt)
-            print(f"  🕐 Applied timezone: {dt.tzinfo}")
 
         dt_utc = dt.astimezone(pytz.UTC)
-        print(f"  🌍 Final UTC datetime: {dt_utc}")
         return dt_utc
 
     def _get_m3u_content(self) -> str:
