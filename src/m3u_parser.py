@@ -6,7 +6,9 @@ from ipytv import playlist
 from ipytv.channel import IPTVAttr
 from urllib.parse import urljoin
 from dotenv import load_dotenv
+from datetime import datetime
 import dateparser
+import pytz
 
 load_dotenv()
 
@@ -85,12 +87,14 @@ class M3UParser:
                 event_sport = group_title
                 
                 # Extract date and time using dateparser
-                try:
-                    event_datetime = dateparser.parse(tvg_name, settings={'PREFER_DATES_FROM': 'future'})
-                    if event_datetime:
-                        event_datetime_full = event_datetime.strftime("%Y-%m-%d %H:%M:%S")
-                except Exception as e:
-                    print(f"Error parsing date for event '{tvg_name}': {e}")
+                date_string = tvg_name.split('=')[0].strip()
+                event_datetime = dateparser.parse(date_string, settings={'PREFER_DATES_FROM': 'future'})
+                print(f"Parsing event: {tvg_name}, parsed_datetime: {event_datetime}")
+                if event_datetime:
+                    # Check if the event is in the past
+                    if event_datetime < datetime.now(pytz.utc):
+                        continue # Skip to the next channel if the event is in the past
+                    event_datetime_full = event_datetime.strftime("%Y-%m-%d %H:%M:%S")
 
                 # Clean the event name by removing date/time and the separator
                 cleaned_name = re.sub(date_pattern, '', tvg_name).strip()

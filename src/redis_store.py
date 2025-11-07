@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timedelta
+import pytz
 import redis
 from .models import UserData
 
@@ -61,19 +62,17 @@ class RedisStore:
             if channel.get("is_event") and channel.get("event_datetime_full"):
                 try:
                     event_dt = datetime.strptime(channel["event_datetime_full"], "%Y-%m-%d %H:%M:%S")
+                    event_dt = pytz.utc.localize(event_dt)
                     # Add 4 hours to the event time for expiration
                     expiration_dt = event_dt + timedelta(hours=4)
-                    now = datetime.now()
+                    now = datetime.now(pytz.utc)
                     if expiration_dt > now:
                         expiration_time_seconds = int((expiration_dt - now).total_seconds())
                         key = f"channel:{tvg_id}"
                         pipeline.set(key, json.dumps(channel), ex=expiration_time_seconds)
-                    else:
-                        print(f"Event {tvg_id} is in the past, not storing with expiration.")
                 except ValueError as e:
                     print(f"Error parsing event_datetime_full for {tvg_id}: {e}")
-                    key = f"channel:{tvg_id}"
-                    pipeline.set(key, json.dumps(channel)) # Store without expiration if date parsing fails or is in past
+                    # Do not store if date parsing fails
             else:
                 key = f"channel:{tvg_id}"
                 pipeline.set(key, json.dumps(channel)) # Store regular channels without expiration
