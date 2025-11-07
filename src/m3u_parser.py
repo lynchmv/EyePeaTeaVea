@@ -60,12 +60,10 @@ class M3UParser:
         # 3️⃣ Normalize formats like "Nov-06-2025" → "Nov 06 2025"
         s_before = s
         s = re.sub(r"([A-Za-z]{3,})-([0-9]{1,2})-([0-9]{4})", r"\1 \2 \3", s)
-        if s != s_before:
 
         # 🆕 Handle cases like "UTC HD" or "UTC SD"
         s_before = s
         s = re.sub(r"UTC\s+(HD|SD)\b", "UTC", s)
-        if s != s_before:
 
         # LYNCH
         if re.search(r"\(\d{1,2}:\d{2}", s):
@@ -92,12 +90,10 @@ class M3UParser:
         if re.search(r"\d{1,2}:\d{2} [AP]M", s):
             s_before = s
             s = re.sub(r"^\d{1,2}:\d{2}\s+", "", s)
-            if s != s_before:
 
         # 4️⃣ Remove stray characters that confuse parsing
         s_before = s
         s = re.sub(r"[^A-Za-z0-9: \-/]", " ", s)
-        if s != s_before:
 
         # 5️⃣ Parse to datetime
         dt = dateparser.parse(s, settings={'PREFER_DATES_FROM': 'future'})
