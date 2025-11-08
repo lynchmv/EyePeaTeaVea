@@ -134,11 +134,37 @@ class M3UParser:
                 print(f"Error fetching M3U from {self.m3u_source}: {e}")
                 return ""
 
+    def _preprocess_m3u_content(self, content: str) -> str:
+        """
+        Pre-processes M3U content to ensure each #EXTINF line has a group-title attribute.
+        If missing, it tries to infer it from #EXTGRP or uses a default.
+        """
+        lines = content.splitlines()
+        processed_lines = []
+        current_group = "Uncategorized" # Default group if none found
+
+        for line in lines:
+            if line.startswith("#EXTM3U"):
+                processed_lines.append(line)
+            elif line.startswith("#EXTGRP:"):
+                current_group = line.split(":", 1)[1].strip()
+                processed_lines.append(line)
+            elif line.startswith("#EXTINF:"):
+                if "group-title" not in line:
+                    # Inject group-title using the current_group
+                    line = line.replace("EXTINF:-1", f'EXTINF:-1 group-title="{current_group}"')
+                processed_lines.append(line)
+            else:
+                processed_lines.append(line)
+        return "\n".join(processed_lines)
+
     def parse(self) -> list[dict]:
         """Parses M3U content using ipytv and extracts channel information."""
         content = self._get_m3u_content()
         if not content:
             return []
+
+        content = self._preprocess_m3u_content(content)
 
         # Pre-process content to ensure #EXTM3U is at the beginning
         extm3u_index = content.find("#EXTM3U")

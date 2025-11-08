@@ -81,7 +81,7 @@ def test_catalog_meta_stream_endpoints(redis_store_fixture: RedisStore):
             "url_tvg": "",
             "stream_url": "http://cnn.com/live"
         }
-        redis_store_fixture.store_channels({sample_channel["tvg_id"]: sample_channel})
+        redis_store_fixture.store_channels([sample_channel])
 
         # Test catalog endpoint
         response = client.get(f"/{secret_str}/catalog/tv/iptv_tv.json")
@@ -95,7 +95,7 @@ def test_catalog_meta_stream_endpoints(redis_store_fixture: RedisStore):
         assert response.status_code == 200
         meta = response.json()
         assert meta["meta"]["name"] == "CNN"
-        assert "thumbnail" in meta["meta"]
+        assert "poster" in meta["meta"]
 
         # Test stream endpoint
         response = client.get(f"/{secret_str}/stream/tv/eyepeateaveaCNN.json")

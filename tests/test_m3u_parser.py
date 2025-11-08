@@ -62,5 +62,41 @@ http://test1.com/live
 
         os.remove(commented_m3u_file)
 
+    def test_parse_m3u_with_extgrp(self):
+        extgrp_m3u_content = """
+#EXTM3U
+#EXTGRP:TheTVApp - NBA
+#EXTINF:-1 tvg-id="NBA.Basketball.Dummy.us" tvg-name="Los Angeles Clippers @ Phoenix Suns - 11/7/25, 2:00:00 AM UTC HD" tvg-logo="http://drewlive24.duckdns.org:9000/Logos/NBA.png" ,Los Angeles Clippers @ Phoenix Suns - 11/7/25 - 2:00:00 AM UTC HD
+https://v8.thetvapp.to/hls/NBATV/tracks-v1a1/mono.m3u8?token=s-zMv_W_mbBLorBvEK0BFA&expires=1762473154&user_id=Z1BLOXE3M1JGcHZ3a0Iwam5ReWNOcUp0dGdJV1NjT3JYRHpMYThJUg==
+#EXTINF:-1 tvg-id="NBA.Basketball.Dummy.us" tvg-name="Los Angeles Clippers @ Phoenix Suns - 11/7/25, 2:00:00 AM UTC SD" tvg-logo="http://drewlive24.duckdns.org:9000/Logos/NBA.png" ,Los Angeles Clippers @ Phoenix Suns - 11/7/25 - 2:00:00 AM UTC SD
+#EXTGRP:TheTVApp - NCAAF
+#EXTINF:-1 tvg-id="NCAA.Football.Dummy.us" tvg-name="Georgia Southern Eagles @ Appalachian State Mountaineers - 11/7/25, 12:30:00 AM UTC HD" tvg-logo="http://drewlive24.duckdns.org:9000/Logos/CFB.png" ,Georgia Southern Eagles @ Appalachian State Mountaineers - 11/7/25 - 12:30:00 AM UTC HD
+https://v2.thetvapp.to/hls/ESPN2/tracks-v1a1/mono.m3u8?token=aoVFMEujepl6xpDrcKxawA&expires=1762473178&user_id=Z1BLOXE3M1JGcHZ3a0Iwam5ReWNOcUp0dGdJV1NjT3JYRHpMYThJUg==
+#EXTINF:-1 tvg-id="NCAA.Football.Dummy.us" tvg-name="Georgia Southern Eagles @ Appalachian State Mountaineers - 11/7/25, 12:30:00 AM UTC SD" tvg-logo="http://drewlive24.duckdns.org:9000/Logos/CFB.png" ,Georgia Southern Eagles @ Appalachian State Mountaineers - 11/7/25 - 12:30:00 AM UTC SD
+#EXTGRP:TheTVApp - NFL
+#EXTINF:-1 tvg-id="NFL.Dummy.us" tvg-name="Las Vegas Raiders @ Denver Broncos - 11/7/25, 1:15:00 AM UTC HD" tvg-logo="http://drewlive24.duckdns.org:9000/Logos/NFL.png" ,Las Vegas Raiders @ Denver Broncos - 11/7/25 - 1:15:00 AM UTC HD
+https://v12.thetvapp.to/hls/tsn1/tracks-v1a1/mono.m3u8?token=_1VjHmli_L9tSAdPHNVTbw&expires=1762473166&user_id=Z1BLOXE3M1JGcHZ3a0Iwam5ReWNOcUp0dGdJV1NjT3JYRHpMYThJUg==
+#EXTINF:-1 tvg-id="NFL.Dummy.us" tvg-name="Las Vegas Raiders @ Denver Broncos - 11/7/25, 1:15:00 AM UTC SD" tvg-logo="http://drewlive24.duckdns.org:9000/Logos/NFL.png" ,Las Vegas Raiders @ Denver Broncos - 11/7/25 - 1:15:00 AM UTC SD
+"""
+        extgrp_m3u_file = "test_extgrp.m3u"
+        with open(extgrp_m3u_file, "w") as f:
+            f.write(extgrp_m3u_content)
+
+        parser = M3UParser(extgrp_m3u_file)
+        channels = parser.parse()
+
+        self.assertEqual(len(channels), 3) # Only 3 events (HD versions) are expected to be parsed
+
+        # Verify NBA channel
+        self.assertEqual(channels[0]["group_title"], "TheTVApp - NBA")
+
+        # Verify NCAAF channel
+        self.assertEqual(channels[1]["group_title"], "TheTVApp - NCAAF")
+
+        # Verify NFL channel
+        self.assertEqual(channels[2]["group_title"], "TheTVApp - NFL")
+
+        os.remove(extgrp_m3u_file)
+
 if __name__ == '__main__':
     unittest.main()

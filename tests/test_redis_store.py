@@ -29,7 +29,7 @@ class TestRedisStore(unittest.TestCase):
             "url_tvg": "",
             "stream_url": "http://cnn.com/live"
         }
-        self.redis_store.store_channels({channel_data["tvg_id"]: channel_data})
+        self.redis_store.store_channels([channel_data])
         retrieved_channel_json = self.redis_store.get_channel("CNN")
         self.assertIsNotNone(retrieved_channel_json)
         retrieved_channel = json.loads(retrieved_channel_json)
@@ -53,10 +53,10 @@ class TestRedisStore(unittest.TestCase):
             "url_tvg": "",
             "stream_url": "http://espn.com/live"
         }
-        self.redis_store.store_channels({
-            channel_data_1["tvg_id"]: channel_data_1,
-            channel_data_2["tvg_id"]: channel_data_2
-        })
+        self.redis_store.store_channels([
+            channel_data_1,
+            channel_data_2
+        ])
         all_channels = self.redis_store.get_all_channels()
         self.assertEqual(len(all_channels), 2)
         self.assertIn("CNN", all_channels)
@@ -72,7 +72,7 @@ class TestRedisStore(unittest.TestCase):
             "url_tvg": "",
             "stream_url": "http://cnn.com/live"
         }
-        self.redis_store.store_channels({channel_data["tvg_id"]: channel_data})
+        self.redis_store.store_channels([channel_data])
         self.redis_store.clear_all_data()
         all_channels = self.redis_store.get_all_channels()
         self.assertEqual(len(all_channels), 0)
