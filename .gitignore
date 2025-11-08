@@ -44,7 +44,4 @@ logs/
 !.env.example
 example.m3u
 example.xml
-GEMINI.md
-PLAN.md
-mediafusion-manifest.json
 .gemini
