@@ -55,7 +55,7 @@ app.add_middleware(
 async def get_user_data_dependency(secret_str: str) -> UserData:
     user_data = redis_store.get_user_data(secret_str)
     if not user_data:
-        raise HTTPException(status_code=404, detail="User configuration not found.")
+        raise HTTPException(status_code=404, detail=f"User configuration not found for secret_str: {secret_str}")
     return user_data
 
 @app.get("/")
@@ -146,36 +146,36 @@ app.mount("/frontend", StaticFiles(directory="frontend", html=True), name="front
 async def get_poster_image(secret_str: str, tvg_id: str, user_data: UserData = Depends(get_user_data_dependency)):
     channel_json = redis_store.get_channel(tvg_id)
     if not channel_json:
-        raise HTTPException(status_code=404, detail="Channel not found")
+        raise HTTPException(status_code=404, detail=f"Channel with tvg_id: {tvg_id} not found.")
     channel = json.loads(channel_json)
     image_url = channel["tvg_logo"]
     processed_image_bytes = await get_poster(redis_store, tvg_id, image_url, channel["tvg_name"])
     if not processed_image_bytes.getvalue():
-        raise HTTPException(status_code=404, detail="Image processing failed or image not found")
+        raise HTTPException(status_code=500, detail=f"Image processing failed for tvg_id: {tvg_id}")
     return Response(content=processed_image_bytes.getvalue(), media_type="image/jpeg")
 
 @app.get("/{secret_str}/background/{tvg_id}.png")
 async def get_background_image(secret_str: str, tvg_id: str, user_data: UserData = Depends(get_user_data_dependency)):
     channel_json = redis_store.get_channel(tvg_id)
     if not channel_json:
-        raise HTTPException(status_code=404, detail="Channel not found")
+        raise HTTPException(status_code=404, detail=f"Channel with tvg_id: {tvg_id} not found.")
     channel = json.loads(channel_json)
     image_url = channel["tvg_logo"]
     processed_image_bytes = await get_background(redis_store, tvg_id, image_url, channel["tvg_name"])
     if not processed_image_bytes.getvalue():
-        raise HTTPException(status_code=404, detail="Image processing failed or image not found")
+        raise HTTPException(status_code=500, detail=f"Image processing failed for tvg_id: {tvg_id}")
     return Response(content=processed_image_bytes.getvalue(), media_type="image/jpeg")
 
 @app.get("/{secret_str}/logo/{tvg_id}.png")
 async def get_logo_image(secret_str: str, tvg_id: str, user_data: UserData = Depends(get_user_data_dependency)):
     channel_json = redis_store.get_channel(tvg_id)
     if not channel_json:
-        raise HTTPException(status_code=404, detail="Channel not found")
+        raise HTTPException(status_code=404, detail=f"Channel with tvg_id: {tvg_id} not found.")
     channel = json.loads(channel_json)
     image_url = channel["tvg_logo"]
     processed_image_bytes = await get_logo(redis_store, tvg_id, image_url, channel["tvg_name"])
     if not processed_image_bytes.getvalue():
-        raise HTTPException(status_code=404, detail="Image processing failed or image not found")
+        raise HTTPException(status_code=500, detail=f"Image processing failed for tvg_id: {tvg_id}")
     return Response(content=processed_image_bytes.getvalue(), media_type="image/jpeg")
 
 @app.get("/{secret_str}/icon/{tvg_id}.png")
@@ -183,18 +183,18 @@ async def get_icon_image(secret_str: str, tvg_id: str, user_data: UserData = Dep
     # For the manifest icon, we use a static logo. For channel icons, we use the channel's logo.
     if tvg_id == "logo":
         image_url = f"{HOST_URL}/icon/logo.png"
-        channel_name = ADDON_NAME
+        channel_name = os.getenv("ADDON_NAME", "EyePeaTeaVea")
     else:
         channel_json = redis_store.get_channel(tvg_id)
         if not channel_json:
-            raise HTTPException(status_code=404, detail="Channel not found")
+            raise HTTPException(status_code=404, detail=f"Channel with tvg_id: {tvg_id} not found.")
         channel = json.loads(channel_json)
         image_url = channel["tvg_logo"]
         channel_name = channel["tvg_name"]
 
     processed_image_bytes = await get_icon(redis_store, tvg_id, image_url, channel_name)
     if not processed_image_bytes.getvalue():
-        raise HTTPException(status_code=404, detail="Image processing failed or image not found")
+        raise HTTPException(status_code=500, detail=f"Image processing failed for tvg_id: {tvg_id}")
     return Response(content=processed_image_bytes.getvalue(), media_type="image/png")
 
 @app.get("/{secret_str}/catalog/{type}/{id}.json")
@@ -216,6 +216,9 @@ async def get_catalog(
 
     if (type == "tv" and id == "iptv_tv") or (type == "events" and id == "iptv_sports_events"):
         channels_data = redis_store.get_all_channels()
+        if not channels_data:
+            return {"metas": []}
+            
         filtered_channels = filter_channels(channels_data, type, extra_name, extra_value)
         
         ADDON_ID_PREFIX = os.getenv("ADDON_ID_PREFIX", "eyepeateavea")
@@ -225,7 +228,7 @@ async def get_catalog(
         
         return {"metas": metas}
 
-    raise HTTPException(status_code=404, detail="Catalog not found")
+    raise HTTPException(status_code=404, detail=f"Catalog with type: {type} and id: {id} not found.")
 
 @app.get("/{secret_str}/meta/{type}/{id}.json")
 async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = Depends(get_user_data_dependency)):
@@ -256,7 +259,7 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
                 meta = create_meta(channel, secret_str, ADDON_ID_PREFIX, HOST_URL)
                 meta.update({"runtime": "", "releaseInfo": "", "links": []})
                 return {"meta": meta}
-    raise HTTPException(status_code=404, detail="Meta not found")
+    raise HTTPException(status_code=404, detail=f"Meta with type: {type} and id: {id} not found.")
 
 @app.get("/{secret_str}/stream/{type}/{id}.json")
 async def get_stream(secret_str: str, type: str, id: str, user_data: UserData = Depends(get_user_data_dependency)):
@@ -280,4 +283,4 @@ async def get_stream(secret_str: str, type: str, id: str, user_data: UserData = 
                 "url": channel["stream_url"]
             }
             return {"streams": [stream]}
-    raise HTTPException(status_code=404, detail="Stream not found")
+    raise HTTPException(status_code=404, detail=f"Stream with type: {type} and id: {id} not found.")
