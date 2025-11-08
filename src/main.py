@@ -97,16 +97,22 @@ async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_d
         except json.JSONDecodeError as e:
             logger.error(f"Error decoding channel JSON from Redis: {e} - {channel_json}")
 
+    ADDON_ID = os.getenv("ADDON_ID", "org.stremio.eyepeateavea")
+    ADDON_VERSION = os.getenv("ADDON_VERSION", "1.0.0")
+    ADDON_NAME = os.getenv("ADDON_NAME", "EyePeaTeaVea")
+    ADDON_DESCRIPTION = os.getenv("ADDON_DESCRIPTION", "Stremio addon for M3U playlists")
+    ADDON_ID_PREFIX = os.getenv("ADDON_ID_PREFIX", "eyepeateavea")
+
     manifest = {
-        "id": "org.stremio.eyepeateavea",
-        "version": "1.0.0",
-        "name": "EyePeaTeaVea",
-        "description": "Stremio addon for M3U playlists",
+        "id": ADDON_ID,
+        "version": ADDON_VERSION,
+        "name": ADDON_NAME,
+        "description": ADDON_DESCRIPTION,
         "logo": f"{HOST_URL}/static/logo.png",
         "resources": [
             "catalog",
-            {"name": "meta", "types": ["tv", "events"], "idPrefixes": ["eyepeateavea"]},
-            {"name": "stream", "types": ["tv", "events"], "idPrefixes": ["eyepeateavea"]}
+            {"name": "meta", "types": ["tv", "events"], "idPrefixes": [ADDON_ID_PREFIX]},
+            {"name": "stream", "types": ["tv", "events"], "idPrefixes": [ADDON_ID_PREFIX]}
         ],
         "types": ["tv", "events"],
         "catalogs": [
@@ -176,7 +182,7 @@ async def get_icon_image(secret_str: str, tvg_id: str, user_data: UserData = Dep
     # For the manifest icon, we use a static logo. For channel icons, we use the channel's logo.
     if tvg_id == "logo":
         image_url = f"{HOST_URL}/icon/logo.png"
-        channel_name = "EyePeaTeaVea"
+        channel_name = ADDON_NAME
     else:
         channel_json = redis_store.get_channel(tvg_id)
         if not channel_json:
@@ -239,7 +245,7 @@ async def get_catalog(
         metas = []
         for channel in filtered_channels:
             meta_obj = {
-                "id": f"eyepeateavea{channel['tvg_id']}",
+                "id": f"{ADDON_ID_PREFIX}{channel['tvg_id']}",
                 "type": "tv",
                 "name": channel["tvg_name"],
                 "poster": f"{HOST_URL}/{secret_str}/poster/{channel['tvg_id']}.png",
@@ -283,7 +289,7 @@ async def get_catalog(
             # Generate a unique ID for the event meta
             import hashlib
             event_unique_id_suffix = hashlib.sha256(channel["event_title"].encode()).hexdigest()[:10]
-            event_id = f"eyepeateavea_event_{channel['tvg_id']}_{event_unique_id_suffix}"
+            event_id = f"{ADDON_ID_PREFIX}_event_{channel['tvg_id']}_{event_unique_id_suffix}"
 
             meta_obj = {
                 "id": event_id,
@@ -304,7 +310,7 @@ async def get_catalog(
 
 @app.get("/{secret_str}/meta/{type}/{id}.json")
 async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = Depends(get_user_data_dependency)):
-    if type == "events" and id.startswith("eyepeateavea_event_"):
+    if type == "events" and id.startswith(f"{ADDON_ID_PREFIX}_event_"):
         parts = id.split('_')
         tvg_id = parts[2]
         event_hash_suffix = parts[3]
@@ -331,8 +337,8 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
                         "links": []
                     }
                     return {"meta": meta}
-    elif type == "tv" and id.startswith("eyepeateavea"):
-        tvg_id = id.replace("eyepeateavea", "")
+    elif type == "tv" and id.startswith(ADDON_ID_PREFIX):
+        tvg_id = id.replace(ADDON_ID_PREFIX, "")
         channel_json = redis_store.get_channel(tvg_id)
         if channel_json:
             channel = json.loads(channel_json)
@@ -357,12 +363,12 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
 @app.get("/{secret_str}/stream/{type}/{id}.json")
 async def get_stream(secret_str: str, type: str, id: str, user_data: UserData = Depends(get_user_data_dependency)):
     logger.info(f"Stream endpoint accessed for secret_str: {secret_str}, type: {type}, id: {id}")
-    if (type == "tv" or type == "events") and (id.startswith("eyepeateavea_event_") or id.startswith("eyepeateavea")):
-        if id.startswith("eyepeateavea_event_"):
+    if (type == "tv" or type == "events") and (id.startswith(f"{ADDON_ID_PREFIX}_event_") or id.startswith(ADDON_ID_PREFIX)):
+        if id.startswith(f"{ADDON_ID_PREFIX}_event_"):
             parts = id.split('_')
             tvg_id = parts[2]
         else:
-            tvg_id = id.replace("eyepeateavea", "")
+            tvg_id = id.replace(ADDON_ID_PREFIX, "")
         channel_json = redis_store.get_channel(tvg_id)
         if channel_json:
             channel = json.loads(channel_json)
