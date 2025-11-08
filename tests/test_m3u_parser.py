@@ -98,5 +98,23 @@ https://v12.thetvapp.to/hls/tsn1/tracks-v1a1/mono.m3u8?token=_1VjHmli_L9tSAdPHNV
 
         os.remove(extgrp_m3u_file)
 
+    def test_event_title_format(self):
+        event_m3u_content = """
+#EXTM3U
+#EXTINF:-1 tvg-id="Event1" tvg-name="11/08/25 08:10:00 PM EST = Portland Trail Blazers @ Miami Heat" group-title="Sports",Event 1
+http://event1.com/live
+"""
+        event_m3u_file = "test_event.m3u"
+        with open(event_m3u_file, "w") as f:
+            f.write(event_m3u_content)
+
+        parser = M3UParser(event_m3u_file)
+        channels = parser.parse()
+        
+        self.assertEqual(len(channels), 1)
+        self.assertEqual(channels[0]["event_title"], "Portland Trail Blazers @ Miami Heat\nNov 8 8:10PM")
+
+        os.remove(event_m3u_file)
+
 if __name__ == '__main__':
     unittest.main()

@@ -184,7 +184,7 @@ class M3UParser:
 
         channels = []
         date_pattern = re.compile(
-            r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b[ -]\d{1,2}[, -]\d{4}",
+            r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b[ -]\d{1,2}[, -]\d{2,4}",
             re.IGNORECASE,
         )
         time_pattern = re.compile(
@@ -221,22 +221,36 @@ class M3UParser:
                     if event_datetime < datetime.now(pytz.utc):
                         continue # Skip to the next channel if the event is in the past
                     event_datetime_full = event_datetime.strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    # Convert to EST for display
+                    est_tz = pytz.timezone("US/Eastern")
+                    est_dt = event_datetime.astimezone(est_tz)
+                    
+                    # Format for display
+                    # Converts 'Nov 08 2025 12:00 PM' to 'Nov 08 12:00PM'
+                    formatted_dt = est_dt.strftime("%b %d %I:%M%p").replace(" 0", " ").replace(":00", "")
+                    
+                    # Further clean the event name
+                    cleaned_name = re.sub(date_pattern, '', tvg_name).strip()
+                    cleaned_name = re.sub(time_pattern, '', cleaned_name).strip()
+                    cleaned_name = re.sub(r'^\s*=\s*|\s*=\s*$', '', cleaned_name).strip()
 
-                # Clean the event name by removing date/time and the separator
-                cleaned_name = re.sub(date_pattern, '', tvg_name).strip()
-                cleaned_name = re.sub(time_pattern, '', cleaned_name).strip()
-                # Also remove common separators that might be left over
-                cleaned_name = re.sub(r'^\s*=\s*|\s*=\s*$', '', cleaned_name).strip()
-
-
-                # Extract teams from the cleaned name
-                team_match = re.search(r"(?P<team1>.*?)\s(?:@|VS)\s(?P<team2>.*)", cleaned_name, re.IGNORECASE)
-                if team_match:
-                    event_team1 = team_match.group("team1").strip()
-                    event_team2 = team_match.group("team2").strip()
-                    event_title = f"{event_team1} @ {event_team2}"
+                    # Extract teams and create title
+                    team_match = re.search(r"(?P<team1>.*?)\s(?:@|VS)\s(?P<team2>.*)", cleaned_name, re.IGNORECASE)
+                    if team_match:
+                        event_team1 = team_match.group("team1").strip()
+                        event_team2 = team_match.group("team2").strip()
+                        event_title = f"{event_team1} @ {event_team2}\n{formatted_dt}"
+                    else:
+                        event_title = f"{cleaned_name}\n{formatted_dt}"
                 else:
-                    event_title = cleaned_name # Fallback to the cleaned name
+                    # Fallback for events without a valid datetime
+                    cleaned_name = re.sub(date_pattern, '', tvg_name).strip()
+                    cleaned_name = re.sub(time_pattern, '', cleaned_name).strip()
+                    cleaned_name = re.sub(r'^\s*=\s*|\s*=\s*$', '', cleaned_name).strip()
+                    event_title = cleaned_name
+            else:
+                event_title = tvg_name # Keep original name if not an event
 
             tvg_logo = channel_obj.attributes.get(IPTVAttr.TVG_LOGO.value, "") # Change default to empty string
 
