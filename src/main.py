@@ -15,6 +15,7 @@ from .models import UserData, ConfigureRequest
 from .utils import generate_secret_str, hash_secret_str
 from .scheduler import Scheduler
 from .image_processor import get_poster, get_background, get_logo, get_icon
+from .catalog_utils import filter_channels, create_meta
 
 load_dotenv()
 
@@ -208,108 +209,29 @@ async def get_catalog(
     extra_name = None
     extra_value = None
     if extra:
-        # Parse the extra string, e.g., "genre=Sports" or "search=NHL"
         parts = extra.split('=', 1)
         if len(parts) == 2:
             extra_name = parts[0]
             extra_value = parts[1]
 
-    if type == "tv" and id == "iptv_tv":
+    if (type == "tv" and id == "iptv_tv") or (type == "events" and id == "iptv_sports_events"):
         channels_data = redis_store.get_all_channels()
-        filtered_channels = []
-
-        # Determine if this is a search or a genre filter
-        is_search = extra_name == "search" and extra_value
-
-        for tvg_id, channel_json in channels_data.items():
-            channel = json.loads(channel_json)
-
-            # Genre filtering
-            if extra_name == "genre" and extra_value:
-                if channel.get("group_title") != extra_value:
-                    continue
-
-            # Search filtering
-            if is_search:
-                if extra_value.lower() not in channel.get("tvg_name", "").lower():
-                    continue
-
-            # Skip channels with events
-            if channel.get("is_event"):
-                continue
-
-            filtered_channels.append(channel)
-
-        filtered_channels.sort(key=lambda x: x.get("tvg_name", "").lower())
-
-        metas = []
-        for channel in filtered_channels:
-            meta_obj = {
-                "id": f"{ADDON_ID_PREFIX}{channel['tvg_id']}",
-                "type": "tv",
-                "name": channel["tvg_name"],
-                "poster": f"{HOST_URL}/{secret_str}/poster/{channel['tvg_id']}.png",
-                "posterShape": "portrait",
-                "background": f"{HOST_URL}/{secret_str}/background/{channel['tvg_id']}.png",
-                "logo": f"{HOST_URL}/{secret_str}/logo/{channel['tvg_id']}.png",
-                "description": f"{channel['tvg_name']}",
-                "genres": [channel["group_title"]]
-            }
-
-            metas.append(meta_obj)
-        return {"metas": metas}
-    elif type == "events" and id == "iptv_sports_events":
-        channels_data = redis_store.get_all_channels()
-        filtered_events = []
-
-        is_search = extra_name == "search" and extra_value
-
-        for tvg_id, channel_json in channels_data.items():
-            channel = json.loads(channel_json)
-
-            if not channel.get("is_event"):
-                continue
-
-            # Genre filtering for events
-            if extra_name == "genre" and extra_value:
-                if channel.get("event_sport") != extra_value:
-                    continue
-
-            # Search filtering for events
-            if is_search:
-                if extra_value.lower() not in channel.get("event_title", "").lower():
-                    continue
-
-            filtered_events.append(channel)
-
-        filtered_events.sort(key=lambda x: x.get("event_title", "").lower())
-
-        metas = []
-        for channel in filtered_events:
-            # Generate a unique ID for the event meta
-            import hashlib
-            event_unique_id_suffix = hashlib.sha256(channel["event_title"].encode()).hexdigest()[:10]
-            event_id = f"{ADDON_ID_PREFIX}_event_{channel['tvg_id']}_{event_unique_id_suffix}"
-
-            meta_obj = {
-                "id": event_id,
-                "type": "events",
-                "name": channel["event_title"],
-                "poster": f"{HOST_URL}/{secret_str}/poster/{channel['tvg_id']}.png",
-                "posterShape": "portrait",
-                "background": f"{HOST_URL}/{secret_str}/background/{channel['tvg_id']}.png",
-                "logo": f"{HOST_URL}/{secret_str}/logo/{channel['tvg_id']}.png",
-                "description": channel["event_title"],
-                "genres": [channel["event_sport"]]
-            }
-            metas.append(meta_obj)
-
+        filtered_channels = filter_channels(channels_data, type, extra_name, extra_value)
+        
+        ADDON_ID_PREFIX = os.getenv("ADDON_ID_PREFIX", "eyepeateavea")
+        HOST_URL = os.getenv("HOST_URL", "http://localhost:8020")
+        
+        metas = [create_meta(channel, secret_str, ADDON_ID_PREFIX, HOST_URL) for channel in filtered_channels]
+        
         return {"metas": metas}
 
     raise HTTPException(status_code=404, detail="Catalog not found")
 
 @app.get("/{secret_str}/meta/{type}/{id}.json")
 async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = Depends(get_user_data_dependency)):
+    ADDON_ID_PREFIX = os.getenv("ADDON_ID_PREFIX", "eyepeateavea")
+    HOST_URL = os.getenv("HOST_URL", "http://localhost:8020")
+
     if type == "events" and id.startswith(f"{ADDON_ID_PREFIX}_event_"):
         parts = id.split('_')
         tvg_id = parts[2]
@@ -322,20 +244,8 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
                 import hashlib
                 current_event_hash_suffix = hashlib.sha256(channel["event_title"].encode()).hexdigest()[:10]
                 if current_event_hash_suffix == event_hash_suffix:
-                    meta = {
-                        "id": id,
-                        "type": "events",
-                        "name": channel["event_title"],
-                        "poster": f"{HOST_URL}/{secret_str}/poster/{tvg_id}.png",
-                        "posterShape": "portrait",
-                        "background": f"{HOST_URL}/{secret_str}/background/{tvg_id}.png",
-                        "logo": f"{HOST_URL}/{secret_str}/logo/{tvg_id}.png",
-                        "description": channel["event_title"],
-                        "genres": [channel["event_sport"]],
-                        "runtime": "",
-                        "releaseInfo": "",
-                        "links": []
-                    }
+                    meta = create_meta(channel, secret_str, ADDON_ID_PREFIX, HOST_URL)
+                    meta.update({"runtime": "", "releaseInfo": "", "links": []})
                     return {"meta": meta}
     elif type == "tv" and id.startswith(ADDON_ID_PREFIX):
         tvg_id = id.replace(ADDON_ID_PREFIX, "")
@@ -343,26 +253,17 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
         if channel_json:
             channel = json.loads(channel_json)
             if not channel.get("is_event"):
-                meta = {
-                    "id": id,
-                    "type": "tv",
-                    "name": channel["tvg_name"],
-                    "poster": f"{HOST_URL}/{secret_str}/poster/{tvg_id}.png",
-                    "posterShape": "portrait",
-                    "background": f"{HOST_URL}/{secret_str}/background/{tvg_id}.png",
-                    "logo": f"{HOST_URL}/{secret_str}/logo/{tvg_id}.png",
-                    "description": f"{channel['tvg_name']}",
-                    "genres": [channel["group_title"]],
-                    "runtime": "",
-                    "releaseInfo": "",
-                    "links": []
-                }
+                meta = create_meta(channel, secret_str, ADDON_ID_PREFIX, HOST_URL)
+                meta.update({"runtime": "", "releaseInfo": "", "links": []})
                 return {"meta": meta}
     raise HTTPException(status_code=404, detail="Meta not found")
 
 @app.get("/{secret_str}/stream/{type}/{id}.json")
 async def get_stream(secret_str: str, type: str, id: str, user_data: UserData = Depends(get_user_data_dependency)):
     logger.info(f"Stream endpoint accessed for secret_str: {secret_str}, type: {type}, id: {id}")
+    
+    ADDON_ID_PREFIX = os.getenv("ADDON_ID_PREFIX", "eyepeateavea")
+
     if (type == "tv" or type == "events") and (id.startswith(f"{ADDON_ID_PREFIX}_event_") or id.startswith(ADDON_ID_PREFIX)):
         if id.startswith(f"{ADDON_ID_PREFIX}_event_"):
             parts = id.split('_')
