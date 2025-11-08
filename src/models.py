@@ -1,16 +1,16 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, HttpUrl
 from typing import List, Optional
 
 class ConfigureRequest(BaseModel):
-    m3u_sources: List[str] = Field(default_factory=list)
+    m3u_sources: List[str] = Field(..., min_length=1)
     parser_schedule_crontab: str = "0 */6 * * *"
-    host_url: str
+    host_url: HttpUrl
     addon_password: Optional[str] = None
 
 class UserData(BaseModel):
     m3u_sources: list[str]
     parser_schedule_crontab: str = "0 */6 * * *"
-    host_url: str
+    host_url: HttpUrl
     addon_password: Optional[str] = None
 
 class Event(BaseModel):
