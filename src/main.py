@@ -246,7 +246,7 @@ async def get_catalog(
                 "posterShape": "portrait",
                 "background": f"{HOST_URL}/{secret_str}/background/{channel['tvg_id']}.png",
                 "logo": f"{HOST_URL}/{secret_str}/logo/{channel['tvg_id']}.png",
-                "description": f"Channel: {channel['tvg_name']} (Group: {channel['group_title']})",
+                "description": f"{channel['tvg_name']}",
                 "genres": [channel["group_title"]]
             }
 
@@ -345,7 +345,7 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
                     "posterShape": "portrait",
                     "background": f"{HOST_URL}/{secret_str}/background/{tvg_id}.png",
                     "logo": f"{HOST_URL}/{secret_str}/logo/{tvg_id}.png",
-                    "description": f"Channel: {channel['tvg_name']} (Group: {channel['group_title']})",
+                    "description": f"{channel['tvg_name']}",
                     "genres": [channel["group_title"]],
                     "runtime": "",
                     "releaseInfo": "",
