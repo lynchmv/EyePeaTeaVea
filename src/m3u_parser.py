@@ -7,7 +7,6 @@ from ipytv.channel import IPTVAttr
 from urllib.parse import urljoin
 from dotenv import load_dotenv
 from datetime import datetime
-import dateparser
 import pytz
 
 load_dotenv()
@@ -96,7 +95,7 @@ class M3UParser:
         s = re.sub(r"[^A-Za-z0-9: \-/]", " ", s)
 
         # 5️⃣ Parse to datetime
-        dt = dateparser.parse(s, settings={'PREFER_DATES_FROM': 'future'})
+        dt = dateparser.parse(s)
 
         if not dt:
             return None
@@ -148,7 +147,6 @@ class M3UParser:
                 processed_lines.append(line)
             elif line.startswith("#EXTGRP:"):
                 current_group = line.split(":", 1)[1].strip()
-                processed_lines.append(line)
             elif line.startswith("#EXTINF:"):
                 if "group-title" not in line:
                     # Inject group-title using the current_group
@@ -193,13 +191,6 @@ class M3UParser:
 
         for channel_obj in iptv_playlist:
             group_title = channel_obj.attributes.get(IPTVAttr.GROUP_TITLE.value, "Other")
-
-            tvg_id = channel_obj.attributes.get(IPTVAttr.TVG_ID.value, "")
-            if not tvg_id:
-                # Generate a unique tvg_id if not present
-                unique_identifier = f"{channel_obj.name}_{channel_obj.url}"
-                tvg_id = hashlib.sha256(unique_identifier.encode()).hexdigest()
-
             tvg_name = channel_obj.attributes.get(IPTVAttr.TVG_NAME.value, channel_obj.name)
             if not tvg_name:
                 tvg_name = "Unknown Channel"
@@ -251,6 +242,16 @@ class M3UParser:
                     event_title = cleaned_name
             else:
                 event_title = tvg_name # Keep original name if not an event
+
+            # Now generate tvg_id
+            tvg_id = channel_obj.attributes.get(IPTVAttr.TVG_ID.value, "")
+            if not tvg_id:
+                if is_event and event_title and event_datetime_full:
+                    unique_identifier = f"{event_title}_{event_datetime_full}"
+                    tvg_id = hashlib.sha256(unique_identifier.encode()).hexdigest()
+                else:
+                    unique_identifier = f"{channel_obj.name}"
+                    tvg_id = hashlib.sha256(unique_identifier.encode()).hexdigest()
 
             tvg_logo = channel_obj.attributes.get(IPTVAttr.TVG_LOGO.value, "") # Change default to empty string
 

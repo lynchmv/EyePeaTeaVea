@@ -117,12 +117,6 @@ class RedisStore:
         keys = self.redis_client.keys("user_data:*")
         return [key.decode('utf-8').replace("user_data:", "") for key in keys]
 
-    def get_all_secret_strs(self) -> list[str]:
-        """Retrieves all stored secret_str keys."""
-        if not self.redis_client: return []
-        keys = self.redis_client.keys("user_data:*")
-        return [key.decode('utf-8').replace("user_data:", "") for key in keys]
-
     def store_processed_image(self, tvg_id: str, image_bytes: bytes):
         """Stores processed image bytes in Redis."""
         if not self.redis_client: return
