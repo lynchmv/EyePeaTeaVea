@@ -88,7 +88,7 @@ async def configure_addon(
 async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_data_dependency)):
     logger.info(f"Manifest endpoint accessed for secret_str: {secret_str}")
 
-    all_channels = redis_store.get_all_channels()
+    all_channels = redis_store.get_all_channels(secret_str)
     unique_group_titles = set()
     unique_event_genres = set()
     for channel_json in all_channels.values():
@@ -148,7 +148,7 @@ app.mount("/frontend", StaticFiles(directory="frontend", html=True), name="front
 
 @app.get("/{secret_str}/poster/{tvg_id}.png")
 async def get_poster_image(secret_str: str, tvg_id: str, user_data: UserData = Depends(get_user_data_dependency)):
-    channel_json = redis_store.get_channel(tvg_id)
+    channel_json = redis_store.get_channel(secret_str, tvg_id)
     if not channel_json:
         raise HTTPException(status_code=404, detail=f"Channel with tvg_id: {tvg_id} not found.")
     channel = json.loads(channel_json)
@@ -160,7 +160,7 @@ async def get_poster_image(secret_str: str, tvg_id: str, user_data: UserData = D
 
 @app.get("/{secret_str}/background/{tvg_id}.png")
 async def get_background_image(secret_str: str, tvg_id: str, user_data: UserData = Depends(get_user_data_dependency)):
-    channel_json = redis_store.get_channel(tvg_id)
+    channel_json = redis_store.get_channel(secret_str, tvg_id)
     if not channel_json:
         raise HTTPException(status_code=404, detail=f"Channel with tvg_id: {tvg_id} not found.")
     channel = json.loads(channel_json)
@@ -172,7 +172,7 @@ async def get_background_image(secret_str: str, tvg_id: str, user_data: UserData
 
 @app.get("/{secret_str}/logo/{tvg_id}.png")
 async def get_logo_image(secret_str: str, tvg_id: str, user_data: UserData = Depends(get_user_data_dependency)):
-    channel_json = redis_store.get_channel(tvg_id)
+    channel_json = redis_store.get_channel(secret_str, tvg_id)
     if not channel_json:
         raise HTTPException(status_code=404, detail=f"Channel with tvg_id: {tvg_id} not found.")
     channel = json.loads(channel_json)
@@ -189,7 +189,7 @@ async def get_icon_image(secret_str: str, tvg_id: str, user_data: UserData = Dep
         image_url = f"{HOST_URL}/icon/logo.png"
         channel_name = os.getenv("ADDON_NAME", "EyePeaTeaVea")
     else:
-        channel_json = redis_store.get_channel(tvg_id)
+        channel_json = redis_store.get_channel(secret_str, tvg_id)
         if not channel_json:
             raise HTTPException(status_code=404, detail=f"Channel with tvg_id: {tvg_id} not found.")
         channel = json.loads(channel_json)
@@ -219,7 +219,7 @@ async def get_catalog(
             extra_value = parts[1]
 
     if (type == "tv" and id == "iptv_tv") or (type == "events" and id == "iptv_sports_events"):
-        channels_data = redis_store.get_all_channels()
+        channels_data = redis_store.get_all_channels(secret_str)
         if not channels_data:
             return {"metas": []}
             
@@ -244,7 +244,7 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
         tvg_id = parts[2]
         event_hash_suffix = parts[3]
 
-        channel_json = redis_store.get_channel(tvg_id)
+        channel_json = redis_store.get_channel(secret_str, tvg_id)
         if channel_json:
             channel = json.loads(channel_json)
             if channel.get("is_event"):
@@ -256,7 +256,7 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
                     return {"meta": meta}
     elif type == "tv" and id.startswith(ADDON_ID_PREFIX):
         tvg_id = id.replace(ADDON_ID_PREFIX, "")
-        channel_json = redis_store.get_channel(tvg_id)
+        channel_json = redis_store.get_channel(secret_str, tvg_id)
         if channel_json:
             channel = json.loads(channel_json)
             if not channel.get("is_event"):
@@ -277,7 +277,7 @@ async def get_stream(secret_str: str, type: str, id: str, user_data: UserData = 
             tvg_id = parts[2]
         else:
             tvg_id = id.replace(ADDON_ID_PREFIX, "")
-        channel_json = redis_store.get_channel(tvg_id)
+        channel_json = redis_store.get_channel(secret_str, tvg_id)
         if channel_json:
             channel = json.loads(channel_json)
             name = channel["event_title"] if channel.get("is_event") else channel["tvg_name"]

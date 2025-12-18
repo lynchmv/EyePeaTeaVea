@@ -115,7 +115,7 @@ def test_catalog_meta_stream_endpoints(redis_store_fixture: RedisStore):
             "url_tvg": "",
             "stream_url": "http://cnn.com/live"
         }
-        redis_store_fixture.store_channels([sample_channel])
+        redis_store_fixture.store_channels(secret_str, [sample_channel])
 
         # Test catalog endpoint
         response = client.get(f"/{secret_str}/catalog/tv/iptv_tv.json")
@@ -173,7 +173,7 @@ def test_catalog_events(redis_store_fixture: RedisStore):
             "event_title": "Live: NBA Finals",
             "event_sport": "Basketball"
         }
-        redis_store_fixture.store_channels([sample_event])
+        redis_store_fixture.store_channels(secret_str, [sample_event])
 
         # Test events catalog endpoint
         response = client.get(f"/{secret_str}/catalog/events/iptv_sports_events.json")

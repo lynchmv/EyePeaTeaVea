@@ -21,6 +21,7 @@ class TestRedisStore(unittest.TestCase):
         self.redis_store.clear_all_data() # Clear data after each test
 
     def test_store_and_get_channel(self):
+        secret_str = generate_secret_str()
         channel_data = {
             "group_title": "News",
             "tvg_id": "CNN",
@@ -29,14 +30,15 @@ class TestRedisStore(unittest.TestCase):
             "url_tvg": "",
             "stream_url": "http://cnn.com/live"
         }
-        self.redis_store.store_channels([channel_data])
-        retrieved_channel_json = self.redis_store.get_channel("CNN")
+        self.redis_store.store_channels(secret_str, [channel_data])
+        retrieved_channel_json = self.redis_store.get_channel(secret_str, "CNN")
         self.assertIsNotNone(retrieved_channel_json)
         retrieved_channel = json.loads(retrieved_channel_json)
         self.assertEqual(retrieved_channel["tvg_id"], "CNN")
         self.assertEqual(retrieved_channel["stream_url"], "http://cnn.com/live")
 
     def test_get_all_channels(self):
+        secret_str = generate_secret_str()
         channel_data_1 = {
             "group_title": "News",
             "tvg_id": "CNN",
@@ -53,17 +55,61 @@ class TestRedisStore(unittest.TestCase):
             "url_tvg": "",
             "stream_url": "http://espn.com/live"
         }
-        self.redis_store.store_channels([
+        self.redis_store.store_channels(secret_str, [
             channel_data_1,
             channel_data_2
         ])
-        all_channels = self.redis_store.get_all_channels()
+        all_channels = self.redis_store.get_all_channels(secret_str)
         self.assertEqual(len(all_channels), 2)
         self.assertIn("CNN", all_channels)
         self.assertIn("ESPN", all_channels)
 
+    def test_user_channel_isolation(self):
+        """Test that channels from different users are isolated from each other."""
+        secret_str_1 = generate_secret_str()
+        secret_str_2 = generate_secret_str()
+        
+        channel_data_1 = {
+            "group_title": "News",
+            "tvg_id": "CNN",
+            "tvg_name": "CNN",
+            "tvg_logo": "cnn.png",
+            "url_tvg": "",
+            "stream_url": "http://cnn.com/live"
+        }
+        channel_data_2 = {
+            "group_title": "Sports",
+            "tvg_id": "ESPN",
+            "tvg_name": "ESPN",
+            "tvg_logo": "espn.png",
+            "url_tvg": "",
+            "stream_url": "http://espn.com/live"
+        }
+        
+        # Store channels for user 1
+        self.redis_store.store_channels(secret_str_1, [channel_data_1])
+        # Store channels for user 2
+        self.redis_store.store_channels(secret_str_2, [channel_data_2])
+        
+        # User 1 should only see their own channels
+        user1_channels = self.redis_store.get_all_channels(secret_str_1)
+        self.assertEqual(len(user1_channels), 1)
+        self.assertIn("CNN", user1_channels)
+        self.assertNotIn("ESPN", user1_channels)
+        
+        # User 2 should only see their own channels
+        user2_channels = self.redis_store.get_all_channels(secret_str_2)
+        self.assertEqual(len(user2_channels), 1)
+        self.assertIn("ESPN", user2_channels)
+        self.assertNotIn("CNN", user2_channels)
+        
+        # User 1 should not be able to access user 2's channels
+        self.assertIsNone(self.redis_store.get_channel(secret_str_1, "ESPN"))
+        # User 2 should not be able to access user 1's channels
+        self.assertIsNone(self.redis_store.get_channel(secret_str_2, "CNN"))
 
     def test_clear_all_data(self):
+        secret_str = generate_secret_str()
         channel_data = {
             "group_title": "News",
             "tvg_id": "CNN",
@@ -72,9 +118,9 @@ class TestRedisStore(unittest.TestCase):
             "url_tvg": "",
             "stream_url": "http://cnn.com/live"
         }
-        self.redis_store.store_channels([channel_data])
+        self.redis_store.store_channels(secret_str, [channel_data])
         self.redis_store.clear_all_data()
-        all_channels = self.redis_store.get_all_channels()
+        all_channels = self.redis_store.get_all_channels(secret_str)
         self.assertEqual(len(all_channels), 0)
 
     def test_store_and_get_user_data(self):

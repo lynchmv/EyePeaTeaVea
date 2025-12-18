@@ -40,7 +40,7 @@ class Scheduler:
                 # Continue with other sources even if one fails
         
         if all_channels_list:
-            self.redis_store.store_channels(all_channels_list)
+            self.redis_store.store_channels(secret_str, all_channels_list)
             logger.info(f"Stored {len(all_channels_list)} channels for secret_str: {secret_str}")
         else:
             logger.warning(f"No channels were parsed for secret_str: {secret_str}")

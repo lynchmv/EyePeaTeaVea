@@ -74,6 +74,8 @@ async def fetch_image_content(redis_store: RedisStore, url: str) -> bytes:
         return b''
 
 async def process_image(redis_store: RedisStore, tvg_id: str, image_url: str, title: str, width: int, height: int, image_type: str, monochrome: bool = False) -> BytesIO:
+    # Cache key is based on tvg_id and image_type, not user-specific
+    # This allows sharing processed images across users since the same channel logo produces the same processed image
     cache_key = f"{tvg_id}_{image_type}"
     cached_image = redis_store.get_processed_image(cache_key)
     if cached_image:
