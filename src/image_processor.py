@@ -8,6 +8,7 @@ This module handles:
 """
 import os
 import httpx
+import asyncio
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 import logging
@@ -35,6 +36,11 @@ GENERIC_PLACEHOLDER_URL = "https://via.placeholder.com/240x135.png?text=No+Logo"
 # Cache constants
 IMAGE_CACHE_EXPIRATION_SECONDS = 60 * 60 * 24 * 7  # 7 days
 IMAGE_FETCH_TIMEOUT_SECONDS = 10
+
+# Retry constants for rate limiting
+MAX_RETRIES = 3
+INITIAL_RETRY_DELAY = 1.0  # seconds
+RETRY_BACKOFF_MULTIPLIER = 2.0  # exponential backoff multiplier
 
 def generate_placeholder_image(
     title: str = "No Logo", 
@@ -110,9 +116,10 @@ def generate_placeholder_image(
 
 async def fetch_image_content(redis_store: RedisStore, url: str) -> bytes:
     """
-    Fetch image content from URL with caching support.
+    Fetch image content from URL with caching support and retry logic.
     
     Checks Redis cache first, then fetches from URL if not cached.
+    Implements retry logic with exponential backoff for rate limiting (429 errors).
     Caches successful fetches for future use.
     
     Args:
@@ -120,7 +127,7 @@ async def fetch_image_content(redis_store: RedisStore, url: str) -> bytes:
         url: URL of the image to fetch
         
     Returns:
-        Image content as bytes, or empty bytes if fetch fails
+        Image content as bytes, or empty bytes if fetch fails after retries
         
     Examples:
         >>> content = await fetch_image_content(redis_store, "http://example.com/logo.png")
@@ -130,29 +137,95 @@ async def fetch_image_content(redis_store: RedisStore, url: str) -> bytes:
     cache_key = f"image_cache:{url}"
     cached_content = redis_store.get(cache_key)
     if cached_content:
-        logger.info(f"Returning cached image content for {url}")
+        logger.debug(f"Returning cached image content for {url}")
         return cached_content
 
-    try:
-        async with httpx.AsyncClient() as client:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"}
-            response = await client.get(url, headers=headers, timeout=IMAGE_FETCH_TIMEOUT_SECONDS, follow_redirects=True)
-            response.raise_for_status()
-            if not response.headers["Content-Type"].lower().startswith("image/"):
-                raise ValueError(f"Unexpected content type: {response.headers['Content-Type']}")
-            
-            content = response.content
-            redis_store.set(cache_key, content, expiration_time=IMAGE_CACHE_EXPIRATION_SECONDS)
-            return content
-    except httpx.HTTPStatusError as e:
-        logger.warning(f"HTTP status error fetching image from {url}: {e}")
-        return b''
-    except httpx.RequestError as e:
-        logger.warning(f"Error fetching image from {url}: {e}")
-        return b''
-    except ValueError as e:
-        logger.warning(f"Error fetching image from {url}: {e}")
-        return b''
+    # Retry logic with exponential backoff for rate limiting
+    retry_delay = INITIAL_RETRY_DELAY
+    last_exception = None
+    
+    for attempt in range(MAX_RETRIES):
+        try:
+            async with httpx.AsyncClient() as client:
+                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"}
+                response = await client.get(url, headers=headers, timeout=IMAGE_FETCH_TIMEOUT_SECONDS, follow_redirects=True)
+                
+                # Handle rate limiting (429) with retry
+                if response.status_code == 429:
+                    if attempt < MAX_RETRIES - 1:
+                        # Check for Retry-After header
+                        retry_after = response.headers.get("Retry-After")
+                        if retry_after:
+                            try:
+                                wait_time = float(retry_after)
+                            except ValueError:
+                                wait_time = retry_delay
+                        else:
+                            wait_time = retry_delay
+                        
+                        logger.warning(
+                            f"Rate limited (429) fetching image from {url}. "
+                            f"Retrying in {wait_time:.1f}s (attempt {attempt + 1}/{MAX_RETRIES})"
+                        )
+                        await asyncio.sleep(wait_time)
+                        retry_delay *= RETRY_BACKOFF_MULTIPLIER
+                        continue
+                    else:
+                        logger.error(f"Rate limit exceeded after {MAX_RETRIES} attempts for {url}")
+                        return b''
+                
+                response.raise_for_status()
+                
+                if not response.headers.get("Content-Type", "").lower().startswith("image/"):
+                    raise ValueError(f"Unexpected content type: {response.headers.get('Content-Type', 'unknown')}")
+                
+                content = response.content
+                redis_store.set(cache_key, content, expiration_time=IMAGE_CACHE_EXPIRATION_SECONDS)
+                return content
+                
+        except httpx.HTTPStatusError as e:
+            # For non-429 errors, don't retry
+            if e.response.status_code != 429:
+                logger.warning(f"HTTP status error fetching image from {url}: {e}")
+                return b''
+            # 429 errors should be caught above, but handle here as fallback
+            last_exception = e
+            if attempt < MAX_RETRIES - 1:
+                logger.warning(
+                    f"HTTP status error (429) fetching image from {url}. "
+                    f"Retrying in {retry_delay:.1f}s (attempt {attempt + 1}/{MAX_RETRIES})"
+                )
+                await asyncio.sleep(retry_delay)
+                retry_delay *= RETRY_BACKOFF_MULTIPLIER
+                continue
+            else:
+                logger.error(f"Rate limit exceeded after {MAX_RETRIES} attempts for {url}")
+                return b''
+                
+        except httpx.RequestError as e:
+            # Network errors - retry with backoff
+            last_exception = e
+            if attempt < MAX_RETRIES - 1:
+                logger.warning(
+                    f"Request error fetching image from {url}: {e}. "
+                    f"Retrying in {retry_delay:.1f}s (attempt {attempt + 1}/{MAX_RETRIES})"
+                )
+                await asyncio.sleep(retry_delay)
+                retry_delay *= RETRY_BACKOFF_MULTIPLIER
+                continue
+            else:
+                logger.error(f"Failed to fetch image from {url} after {MAX_RETRIES} attempts: {e}")
+                return b''
+                
+        except ValueError as e:
+            # Content type errors - don't retry
+            logger.warning(f"Error fetching image from {url}: {e}")
+            return b''
+    
+    # Should not reach here, but handle it gracefully
+    if last_exception:
+        logger.error(f"Failed to fetch image from {url} after {MAX_RETRIES} attempts: {last_exception}")
+    return b''
 
 async def process_image(
     redis_store: RedisStore, 
