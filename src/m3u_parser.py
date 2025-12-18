@@ -2,6 +2,7 @@ import re
 import requests
 import os
 import hashlib
+import logging
 from ipytv import playlist
 from ipytv.channel import IPTVAttr
 from urllib.parse import urljoin
@@ -10,6 +11,8 @@ from datetime import datetime
 import pytz
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 HOST_URL = os.getenv("HOST_URL", "http://localhost:8020")
 
@@ -130,7 +133,7 @@ class M3UParser:
                 response.raise_for_status()  # Raise an HTTPError for bad responses (4xx or 5xx)
                 return response.text
             except requests.exceptions.RequestException as e:
-                print(f"Error fetching M3U from {self.m3u_source}: {e}")
+                logger.error(f"Error fetching M3U from {self.m3u_source}: {e}")
                 return ""
 
     def _preprocess_m3u_content(self, content: str) -> str:
@@ -171,13 +174,13 @@ class M3UParser:
             content = content[extm3u_index:]
         elif extm3u_index == -1:
             # If #EXTM3U is not found at all, it's an invalid M3U
-            print("Error: #EXTM3U tag not found in the playlist content.")
+            logger.error("Error: #EXTM3U tag not found in the playlist content.")
             return []
 
         try:
             iptv_playlist = playlist.loads(content)
         except Exception as e:
-            print(f"Error loading M3U content with ipytv: {e}")
+            logger.error(f"Error loading M3U content with ipytv: {e}")
             return []
 
         channels = []
@@ -206,7 +209,7 @@ class M3UParser:
                 event_sport = group_title
 
                 event_datetime = self.extract_event_datetime(tvg_name)
-                print(f"Parsing event: {tvg_name}, parsed_datetime: {event_datetime}")
+                logger.debug(f"Parsing event: {tvg_name}, parsed_datetime: {event_datetime}")
                 if event_datetime:
                     # Check if the event is in the past
                     if event_datetime < datetime.now(pytz.utc):

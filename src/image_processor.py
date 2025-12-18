@@ -21,14 +21,27 @@ def generate_placeholder_image(title: str = "No Logo", width: int = 500, height:
         
     d = ImageDraw.Draw(img)
     
-    try:
-        font_path = "resources/fonts/IBMPlexSans-Medium.ttf"
-        if os.path.exists(font_path):
-            font = ImageFont.truetype(font_path, 40)
-        else:
-            font = ImageFont.load_default()
-    except Exception:
-        font = ImageFont.load_default()
+    # Try to load a custom font, fall back to default if not available
+    font = ImageFont.load_default()
+    font_paths = [
+        "resources/fonts/IBMPlexSans-Medium.ttf",  # Project-specific font
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Common Linux font
+        "/System/Library/Fonts/Helvetica.ttc",  # macOS font
+        "C:/Windows/Fonts/arial.ttf",  # Windows font
+    ]
+    
+    for font_path in font_paths:
+        try:
+            if os.path.exists(font_path):
+                font = ImageFont.truetype(font_path, 40)
+                logger.debug(f"Using font: {font_path}")
+                break
+        except Exception as e:
+            logger.debug(f"Could not load font {font_path}: {e}")
+            continue
+    
+    if font == ImageFont.load_default():
+        logger.debug("Using default font (no custom font found)")
 
     text = title
     bbox = d.textbbox((0, 0), text, font=font)

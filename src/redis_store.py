@@ -1,26 +1,30 @@
 import json
+import logging
 from datetime import datetime, timedelta
 import pytz
 import redis
 from .models import UserData
+
+logger = logging.getLogger(__name__)
 
 class RedisStore:
     def __init__(self, redis_url):
         try:
             self.redis_client = redis.from_url(redis_url)
             self.redis_client.ping()
-            print(f"Successfully connected to Redis at {redis_url}")
+            logger.info(f"Successfully connected to Redis at {redis_url}")
         except redis.exceptions.ConnectionError as e:
             self.redis_client = None
-            print(f"Could not connect to Redis at {redis_url}: {e}")
+            logger.error(f"Could not connect to Redis at {redis_url}: {e}")
 
     def clear_all_user_data(self):
         if not self.redis_client:
+            logger.warning("Cannot clear user data: Redis client not initialized")
             return
         keys = self.redis_client.keys("user_data:*")
         if keys:
             self.redis_client.delete(*keys)
-            print(f"Cleared {len(keys)} user data entries from Redis.")
+            logger.info(f"Cleared {len(keys)} user data entries from Redis.")
 
     def get(self, key: str) -> bytes | None:
         """Retrieves a value from Redis by key."""
@@ -34,9 +38,11 @@ class RedisStore:
 
     def store_user_data(self, secret_str: str, user_data: UserData):
         """Stores user-specific configuration data in Redis."""
-        if not self.redis_client: return
+        if not self.redis_client:
+            logger.warning(f"Cannot store user data for {secret_str[:8]}...: Redis client not initialized")
+            return
         self.redis_client.set(f"user_data:{secret_str}", user_data.model_dump_json())
-        print(f"Stored UserData for secret_str: {secret_str}")
+        logger.info(f"Stored UserData for secret_str: {secret_str[:8]}...")
 
     def get_user_data(self, secret_str: str) -> UserData | None:
         """Retrieves user-specific configuration data from Redis."""
@@ -48,10 +54,12 @@ class RedisStore:
 
     def store_channel(self, secret_str: str, tvg_id: str, channel_data: dict, expiration_time_seconds: int | None = None):
         """Stores a single channel or event in Redis with an optional expiration time, scoped to a user."""
-        if not self.redis_client: return
+        if not self.redis_client:
+            logger.warning(f"Cannot store channel {tvg_id} for {secret_str[:8]}...: Redis client not initialized")
+            return
         key = f"channel:{secret_str}:{tvg_id}"
         self.redis_client.set(key, json.dumps(channel_data), ex=expiration_time_seconds)
-        print(f"Stored channel/event {tvg_id} for user {secret_str[:8]}... with expiration {expiration_time_seconds}s.")
+        logger.debug(f"Stored channel/event {tvg_id} for user {secret_str[:8]}... with expiration {expiration_time_seconds}s.")
 
     def store_channels(self, secret_str: str, channels: list[dict]):
         """Stores M3U channel data in Redis for a specific user, handling events with expiration."""
@@ -73,14 +81,14 @@ class RedisStore:
                         pipeline.set(key, json.dumps(channel), ex=expiration_time_seconds)
                         channels_stored += 1
                 except ValueError as e:
-                    print(f"Error parsing event_datetime_full for {tvg_id}: {e}")
+                    logger.error(f"Error parsing event_datetime_full for {tvg_id}: {e}")
                     # Do not store if date parsing fails
             else:
                 key = f"channel:{secret_str}:{tvg_id}"
                 pipeline.set(key, json.dumps(channel)) # Store regular channels without expiration
                 channels_stored += 1
         pipeline.execute()
-        print(f"Stored {channels_stored} channels/events in Redis for user {secret_str[:8]}...")
+        logger.info(f"Stored {channels_stored} channels/events in Redis for user {secret_str[:8]}...")
 
     def get_channel(self, secret_str: str, tvg_id: str) -> str | None:
         """Retrieves a single channel or event by its tvg_id for a specific user."""
@@ -118,17 +126,19 @@ class RedisStore:
         # Find all user_data keys and delete them
         for key in self.redis_client.scan_iter("user_data:*"):
             self.redis_client.delete(key)
-        print("Cleared all M3U data from Redis.")
+        logger.info("Cleared all M3U data from Redis.")
     
     def clear_user_channels(self, secret_str: str):
         """Clears all channels and events for a specific user."""
-        if not self.redis_client: return
+        if not self.redis_client:
+            logger.warning(f"Cannot clear channels for {secret_str[:8]}...: Redis client not initialized")
+            return
         pattern = f"channel:{secret_str}:*"
         deleted_count = 0
         for key in self.redis_client.scan_iter(pattern):
             self.redis_client.delete(key)
             deleted_count += 1
-        print(f"Cleared {deleted_count} channels/events for user {secret_str[:8]}...")
+        logger.info(f"Cleared {deleted_count} channels/events for user {secret_str[:8]}...")
 
     def get_all_secret_strs(self) -> list[str]:
         """Retrieves all stored secret_str keys."""
@@ -161,7 +171,7 @@ if __name__ == "__main__":
 
         # Generate a test secret_str
         test_secret_str = generate_secret_str()
-        print(f"Using test secret_str: {test_secret_str[:8]}...")
+        logger.info(f"Using test secret_str: {test_secret_str[:8]}...")
 
         # Sample M3U Channels
         sample_channels = [
@@ -172,14 +182,14 @@ if __name__ == "__main__":
         ]
         redis_store.store_channels(test_secret_str, sample_channels)
 
-        # Retrieve and print channels
-        print("\nAll Channels:")
+        # Retrieve and log channels
+        logger.info("\nAll Channels:")
         for tvg_id, channel_data in redis_store.get_all_channels(test_secret_str).items():
-            print(f"{tvg_id}: {channel_data}")
-        print("\nSpecific Channel (CNN):")
-        print(redis_store.get_channel(test_secret_str, "CNN"))
-        print("\nSpecific Event (NFL_Event_1):")
-        print(redis_store.get_channel(test_secret_str, "NFL_Event_1"))
+            logger.info(f"{tvg_id}: {channel_data}")
+        logger.info("\nSpecific Channel (CNN):")
+        logger.info(redis_store.get_channel(test_secret_str, "CNN"))
+        logger.info("\nSpecific Event (NFL_Event_1):")
+        logger.info(redis_store.get_channel(test_secret_str, "NFL_Event_1"))
 
     else:
-        print("Redis client not initialized. Cannot run example usage.")
+        logger.error("Redis client not initialized. Cannot run example usage.")
