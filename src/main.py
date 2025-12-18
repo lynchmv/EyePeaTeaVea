@@ -77,6 +77,10 @@ async def configure_addon(
 
     logger.info(f"Triggering immediate M3U fetch for secret_str: {secret_str}")
     scheduler.trigger_m3u_fetch_for_user(secret_str, user_data)
+    
+    # Reload scheduler to include the new user's scheduled job
+    logger.info(f"Reloading scheduler to include new configuration for secret_str: {secret_str}")
+    scheduler.start_scheduler()
 
     return {"secret_str": secret_str, "message": "Configuration saved successfully. Use this secret_str in your addon URL."}
 
