@@ -28,7 +28,7 @@ from urllib.parse import urljoin
 
 from .redis_store import RedisStore, RedisConnectionError
 from .models import UserData, ConfigureRequest, UpdateConfigureRequest
-from .utils import generate_secret_str, hash_secret_str, validate_secret_str
+from .utils import generate_secret_str, hash_secret_str, validate_secret_str, hash_password
 from .scheduler import Scheduler
 from .image_processor import get_poster, get_background, get_logo, get_icon
 from .catalog_utils import filter_channels, create_meta
@@ -290,19 +290,21 @@ async def configure_addon(
     """Configure a new addon instance. Rate limited to 10 requests per hour per IP."""
     try:
         secret_str = generate_secret_str()
+        # Hash password before storage if provided
+        hashed_password = hash_password(request.addon_password) if request.addon_password else None
         user_data = UserData(
             m3u_sources=request.m3u_sources,
             parser_schedule_crontab=request.parser_schedule_crontab,
             host_url=request.host_url,
-            addon_password=request.addon_password
+            addon_password=hashed_password
         )
         redis_store.store_user_data(secret_str, user_data)
 
-        logger.info(f"Triggering immediate M3U fetch for secret_str: {secret_str}")
+        logger.info(f"Triggering immediate M3U fetch for secret_str: {secret_str[:8]}...")
         scheduler.trigger_m3u_fetch_for_user(secret_str, user_data)
         
         # Reload scheduler to include the new user's scheduled job
-        logger.info(f"Reloading scheduler to include new configuration for secret_str: {secret_str}")
+        logger.info(f"Reloading scheduler to include new configuration for secret_str: {secret_str[:8]}...")
         scheduler.start_scheduler()
 
         return {"secret_str": secret_str, "message": "Configuration saved successfully. Use this secret_str in your addon URL."}
@@ -312,12 +314,17 @@ async def configure_addon(
 
 @app.get("/{secret_str}/config")
 async def get_config(secret_str: str, user_data: UserData = Depends(get_user_data_dependency)):
-    """Get the current configuration for a user (read-only, for UI purposes)."""
+    """
+    Get the current configuration for a user (read-only, for UI purposes).
+    
+    Note: Password is never returned for security reasons. Use a boolean
+    to indicate if a password is set.
+    """
     return {
         "m3u_sources": user_data.m3u_sources,
         "parser_schedule_crontab": user_data.parser_schedule_crontab,
         "host_url": str(user_data.host_url),
-        "addon_password": user_data.addon_password
+        "has_password": user_data.addon_password is not None  # Never return actual password
     }
 
 @app.put("/{secret_str}/configure")
@@ -329,7 +336,7 @@ async def update_configure_addon(
 ):
     """Update an existing user configuration. Only provided fields will be updated."""
     try:
-        logger.info(f"Update configuration requested for secret_str: {secret_str}")
+        logger.info(f"Update configuration requested for secret_str: {secret_str[:8]}...")
         
         # Merge update request with existing user data
         # Only update fields that are provided (not None)
@@ -338,8 +345,11 @@ async def update_configure_addon(
         updated_crontab = request.parser_schedule_crontab if request.parser_schedule_crontab is not None else user_data.parser_schedule_crontab
         updated_host_url = request.host_url if request.host_url is not None else user_data.host_url
         if request.addon_password is not None:
-            # Empty string means remove password, otherwise use the provided value
-            updated_password = None if request.addon_password == "" else request.addon_password
+            # Empty string means remove password, otherwise hash the provided value
+            if request.addon_password == "":
+                updated_password = None
+            else:
+                updated_password = hash_password(request.addon_password)
         else:
             updated_password = user_data.addon_password
         
@@ -354,12 +364,12 @@ async def update_configure_addon(
         # Store updated configuration
         redis_store.store_user_data(secret_str, updated_user_data)
         
-        logger.info(f"Configuration updated for secret_str: {secret_str}")
-        logger.info(f"Triggering immediate M3U fetch for secret_str: {secret_str}")
+        logger.info(f"Configuration updated for secret_str: {secret_str[:8]}...")
+        logger.info(f"Triggering immediate M3U fetch for secret_str: {secret_str[:8]}...")
         scheduler.trigger_m3u_fetch_for_user(secret_str, updated_user_data)
         
         # Reload scheduler to update the scheduled job with new cron expression if it changed
-        logger.info(f"Reloading scheduler to update configuration for secret_str: {secret_str}")
+        logger.info(f"Reloading scheduler to update configuration for secret_str: {secret_str[:8]}...")
         scheduler.start_scheduler()
         
         return {
@@ -378,7 +388,7 @@ async def update_configure_addon(
 
 @app.get("/{secret_str}/manifest.json")
 async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_data_dependency)):
-    logger.info(f"Manifest endpoint accessed for secret_str: {secret_str}")
+    logger.info(f"Manifest endpoint accessed for secret_str: {secret_str[:8]}...")
 
     all_channels = redis_store.get_all_channels(secret_str)
     unique_group_titles = set()
@@ -533,7 +543,7 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
 
 @app.get("/{secret_str}/stream/{type}/{id}.json")
 async def get_stream(secret_str: str, type: str, id: str, user_data: UserData = Depends(get_user_data_dependency)):
-    logger.info(f"Stream endpoint accessed for secret_str: {secret_str}, type: {type}, id: {id}")
+    logger.info(f"Stream endpoint accessed for secret_str: {secret_str[:8]}..., type: {type}, id: {id}")
     
     if (type == "tv" or type == "events") and (id.startswith(f"{ADDON_ID_PREFIX}_event_") or id.startswith(ADDON_ID_PREFIX)):
         if id.startswith(f"{ADDON_ID_PREFIX}_event_"):

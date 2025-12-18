@@ -11,3 +11,4 @@ anyio
 m3u-ipytv
 Pillow
 dateparser
+bcrypt

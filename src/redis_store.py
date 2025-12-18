@@ -359,14 +359,28 @@ class RedisStore:
             raise
     
     def clear_user_channels(self, secret_str: str) -> None:
-        """Clears all channels and events for a specific user."""
+        """
+        Clears all channels and events for a specific user.
+        
+        Uses batch deletion for better performance with large datasets.
+        """
         try:
             self._ensure_connection()
             pattern = f"channel:{secret_str}:*"
-            deleted_count = 0
+            keys_to_delete = []
+            
+            # Collect all keys to delete
             for key in self.redis_client.scan_iter(pattern):
-                self.redis_client.delete(key)
-                deleted_count += 1
+                keys_to_delete.append(key)
+            
+            # Delete in batches for better performance
+            deleted_count = 0
+            if keys_to_delete:
+                for i in range(0, len(keys_to_delete), REDIS_BATCH_SIZE):
+                    batch = keys_to_delete[i:i + REDIS_BATCH_SIZE]
+                    self.redis_client.delete(*batch)
+                    deleted_count += len(batch)
+            
             logger.info(f"Cleared {deleted_count} channels/events for user {secret_str[:8]}...")
         except RedisConnectionError as e:
             logger.error(f"Cannot clear channels for {secret_str[:8]}...: {e}")

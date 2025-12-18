@@ -53,7 +53,7 @@ class Scheduler:
             secret_str: User's unique secret string
             user_data: UserData containing M3U sources and configuration
         """
-        logger.info(f"Starting scheduled M3U fetch for secret_str: {secret_str}")
+        logger.info(f"Starting scheduled M3U fetch for secret_str: {secret_str[:8]}...")
         all_channels_list = []
         errors = []
         
@@ -63,24 +63,30 @@ class Scheduler:
                 channels_list = m3u_parser.parse()
                 all_channels_list.extend(channels_list)
                 logger.info(f"Successfully parsed {len(channels_list)} channels from {source}")
-            except Exception as e:
+            except (ValueError, IOError, ConnectionError) as e:
+                # More specific exceptions for parsing/network errors
                 error_msg = f"Error parsing M3U source {source}: {e}"
                 logger.error(error_msg)
                 errors.append(error_msg)
                 # Continue with other sources even if one fails
+            except Exception as e:
+                # Catch-all for unexpected errors
+                error_msg = f"Unexpected error parsing M3U source {source}: {e}"
+                logger.error(error_msg, exc_info=True)
+                errors.append(error_msg)
         
         if all_channels_list:
             try:
                 self.redis_store.store_channels(secret_str, all_channels_list)
-                logger.info(f"Stored {len(all_channels_list)} channels for secret_str: {secret_str}")
+                logger.info(f"Stored {len(all_channels_list)} channels for secret_str: {secret_str[:8]}...")
             except RedisConnectionError as e:
                 logger.error(f"Failed to store channels for {secret_str[:8]}...: {e}")
                 errors.append(f"Redis connection error: {e}")
         else:
-            logger.warning(f"No channels were parsed for secret_str: {secret_str}")
+            logger.warning(f"No channels were parsed for secret_str: {secret_str[:8]}...")
         
         if errors:
-            logger.warning(f"Encountered {len(errors)} errors during M3U fetch for secret_str: {secret_str}")
+            logger.warning(f"Encountered {len(errors)} errors during M3U fetch for secret_str: {secret_str[:8]}...")
 
     def _scheduled_fetch_wrapper(self, secret_str: str) -> None:
         """
@@ -95,7 +101,7 @@ class Scheduler:
         """
         user_data = self.redis_store.get_user_data(secret_str)
         if not user_data:
-            logger.error(f"User data not found for secret_str: {secret_str}. Skipping scheduled fetch.")
+            logger.error(f"User data not found for secret_str: {secret_str[:8]}.... Skipping scheduled fetch.")
             return
         self._fetch_and_store_m3u(secret_str, user_data)
 
@@ -176,7 +182,7 @@ class Scheduler:
         for secret_str in secret_strs:
             user_data = self.redis_store.get_user_data(secret_str)
             if not user_data:
-                logger.warning(f"User data not found for secret_str: {secret_str}. Skipping scheduling.")
+                logger.warning(f"User data not found for secret_str: {secret_str[:8]}.... Skipping scheduling.")
                 jobs_failed += 1
                 continue
             

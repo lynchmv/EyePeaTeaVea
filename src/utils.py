@@ -4,6 +4,7 @@ Utility functions for secret generation, hashing, and validation.
 This module provides helper functions for:
 - Generating secure random strings for user identification
 - Hashing secrets for secure storage
+- Password hashing and verification
 - Validating cron expressions
 - Validating URLs
 - Validating secret_str format
@@ -11,6 +12,7 @@ This module provides helper functions for:
 import secrets
 import hashlib
 import re
+import bcrypt
 from urllib.parse import urlparse
 from apscheduler.triggers.cron import CronTrigger
 
@@ -21,6 +23,57 @@ def generate_secret_str(length: int = 32) -> str:
 def hash_secret_str(secret_str: str) -> str:
     """Hashes the secret_str for secure storage or comparison."""
     return hashlib.sha256(secret_str.encode()).hexdigest()
+
+def hash_password(password: str) -> str:
+    """
+    Hash a password using bcrypt.
+    
+    Uses bcrypt with automatic salt generation for secure password storage.
+    The returned hash includes the salt and can be verified using verify_password().
+    
+    Args:
+        password: Plain text password to hash
+        
+    Returns:
+        Bcrypt hash string (includes salt)
+        
+    Examples:
+        >>> hash = hash_password("mypassword")
+        >>> verify_password("mypassword", hash)
+        True
+        >>> verify_password("wrongpassword", hash)
+        False
+    """
+    if not password:
+        raise ValueError("Password cannot be empty")
+    # Generate salt and hash password (bcrypt handles salt automatically)
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+def verify_password(password: str, password_hash: str) -> bool:
+    """
+    Verify a password against a bcrypt hash.
+    
+    Args:
+        password: Plain text password to verify
+        password_hash: Bcrypt hash string (from hash_password)
+        
+    Returns:
+        True if password matches, False otherwise
+        
+    Examples:
+        >>> hash = hash_password("mypassword")
+        >>> verify_password("mypassword", hash)
+        True
+        >>> verify_password("wrongpassword", hash)
+        False
+    """
+    if not password or not password_hash:
+        return False
+    try:
+        return bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
+    except (ValueError, TypeError):
+        # Handle invalid hash format gracefully
+        return False
 
 def validate_cron_expression(cron_str: str) -> str:
     """
