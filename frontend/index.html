@@ -12,6 +12,26 @@
         <div class="card">
             <div class="card-body">
                 <h1 class="card-title text-center mb-4">EyePeaTeaVea Configuration</h1>
+                
+                <!-- Mode Toggle -->
+                <div class="btn-group w-100 mb-4" role="group" aria-label="Configuration mode">
+                    <input type="radio" class="btn-check" name="config-mode" id="mode-new" autocomplete="off" checked>
+                    <label class="btn btn-outline-primary" for="mode-new">New Configuration</label>
+                    
+                    <input type="radio" class="btn-check" name="config-mode" id="mode-update" autocomplete="off">
+                    <label class="btn btn-outline-primary" for="mode-update">Update Existing</label>
+                </div>
+                
+                <!-- Secret String Input (for update mode) -->
+                <div id="secret-str-group" class="mb-3" style="display: none;">
+                    <label for="secret_str" class="form-label">Secret String</label>
+                    <div class="input-group">
+                        <input type="text" class="form-control" id="secret_str" name="secret_str" placeholder="Enter your secret_str to load existing configuration">
+                        <button class="btn btn-outline-secondary" type="button" id="load-config-btn">Load Configuration</button>
+                    </div>
+                    <small class="form-text text-muted">Enter your secret_str to load and update your existing configuration.</small>
+                </div>
+                
                 <form id="config-form">
                     <div class="mb-3">
                         <label for="m3u_sources" class="form-label">M3U Playlist URLs (one per line)</label>
@@ -30,9 +50,9 @@
                         <input type="password" class="form-control" id="addon_password" name="addon_password">
                     </div>
                     <div class="d-grid gap-2 mb-3">
-                        <button type="submit" class="btn btn-primary">
+                        <button type="submit" class="btn btn-primary" id="submit-btn">
                             <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true" style="display: none;"></span>
-                            Install in Stremio
+                            <span id="submit-btn-text">Install in Stremio</span>
                         </button>
                     </div>
                     <div class="d-flex justify-content-center gap-2">

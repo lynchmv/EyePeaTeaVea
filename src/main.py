@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from urllib.parse import urljoin
 
 from .redis_store import RedisStore
-from .models import UserData, ConfigureRequest
+from .models import UserData, ConfigureRequest, UpdateConfigureRequest
 from .utils import generate_secret_str, hash_secret_str
 from .scheduler import Scheduler
 from .image_processor import get_poster, get_background, get_logo, get_icon
@@ -103,6 +103,68 @@ async def configure_addon(
     scheduler.start_scheduler()
 
     return {"secret_str": secret_str, "message": "Configuration saved successfully. Use this secret_str in your addon URL."}
+
+@app.get("/{secret_str}/config")
+async def get_config(secret_str: str, user_data: UserData = Depends(get_user_data_dependency)):
+    """Get the current configuration for a user (read-only, for UI purposes)."""
+    return {
+        "m3u_sources": user_data.m3u_sources,
+        "parser_schedule_crontab": user_data.parser_schedule_crontab,
+        "host_url": str(user_data.host_url),
+        "addon_password": user_data.addon_password
+    }
+
+@app.put("/{secret_str}/configure")
+@app.patch("/{secret_str}/configure")
+async def update_configure_addon(
+    secret_str: str,
+    request: UpdateConfigureRequest,
+    user_data: UserData = Depends(get_user_data_dependency)
+):
+    """Update an existing user configuration. Only provided fields will be updated."""
+    logger.info(f"Update configuration requested for secret_str: {secret_str}")
+    
+    # Merge update request with existing user data
+    # Only update fields that are provided (not None)
+    # For addon_password, empty string means remove password (set to None)
+    updated_m3u_sources = request.m3u_sources if request.m3u_sources is not None else user_data.m3u_sources
+    updated_crontab = request.parser_schedule_crontab if request.parser_schedule_crontab is not None else user_data.parser_schedule_crontab
+    updated_host_url = request.host_url if request.host_url is not None else user_data.host_url
+    if request.addon_password is not None:
+        # Empty string means remove password, otherwise use the provided value
+        updated_password = None if request.addon_password == "" else request.addon_password
+    else:
+        updated_password = user_data.addon_password
+    
+    # Create updated user data
+    updated_user_data = UserData(
+        m3u_sources=updated_m3u_sources,
+        parser_schedule_crontab=updated_crontab,
+        host_url=updated_host_url,
+        addon_password=updated_password
+    )
+    
+    # Store updated configuration
+    redis_store.store_user_data(secret_str, updated_user_data)
+    
+    logger.info(f"Configuration updated for secret_str: {secret_str}")
+    logger.info(f"Triggering immediate M3U fetch for secret_str: {secret_str}")
+    scheduler.trigger_m3u_fetch_for_user(secret_str, updated_user_data)
+    
+    # Reload scheduler to update the scheduled job with new cron expression if it changed
+    logger.info(f"Reloading scheduler to update configuration for secret_str: {secret_str}")
+    scheduler.start_scheduler()
+    
+    return {
+        "secret_str": secret_str,
+        "message": "Configuration updated successfully.",
+        "updated_fields": {
+            "m3u_sources": request.m3u_sources is not None,
+            "parser_schedule_crontab": request.parser_schedule_crontab is not None,
+            "host_url": request.host_url is not None,
+            "addon_password": request.addon_password is not None
+        }
+    }
 
 @app.get("/{secret_str}/manifest.json")
 async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_data_dependency)):

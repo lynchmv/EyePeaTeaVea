@@ -11,15 +11,92 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('copyBtn').style.display = 'inline-block';
     }
 
+    // Mode toggle handlers
+    const modeNew = document.getElementById('mode-new');
+    const modeUpdate = document.getElementById('mode-update');
+    const secretStrGroup = document.getElementById('secret-str-group');
+    const secretStrInput = document.getElementById('secret_str');
+    const submitBtn = document.getElementById('submit-btn');
+    const submitBtnText = document.getElementById('submit-btn-text');
+    const loadConfigBtn = document.getElementById('load-config-btn');
+
+    modeNew.addEventListener('change', () => {
+        if (modeNew.checked) {
+            secretStrGroup.style.display = 'none';
+            submitBtnText.textContent = 'Install in Stremio';
+            clearForm();
+        }
+    });
+
+    modeUpdate.addEventListener('change', () => {
+        if (modeUpdate.checked) {
+            secretStrGroup.style.display = 'block';
+            submitBtnText.textContent = 'Update Configuration';
+        }
+    });
+
+    // Load existing configuration
+    loadConfigBtn.addEventListener('click', async () => {
+        const secretStr = secretStrInput.value.trim();
+        if (!secretStr) {
+            alert('Please enter your secret_str');
+            return;
+        }
+
+        loadConfigBtn.disabled = true;
+        loadConfigBtn.textContent = 'Loading...';
+
+        try {
+            // Fetch manifest to verify secret_str exists and get user data
+            const response = await fetch(`/${secretStr}/manifest.json`);
+            if (!response.ok) {
+                throw new Error('Configuration not found. Please check your secret_str.');
+            }
+
+            // We need to get the user data - let's try to fetch it from the backend
+            // Since we don't have a direct endpoint, we'll need to add one or use the manifest
+            // For now, let's add an endpoint to get user config (read-only)
+            const configResponse = await fetch(`/${secretStr}/config`);
+            if (!configResponse.ok) {
+                throw new Error('Could not load configuration.');
+            }
+
+            const config = await configResponse.json();
+            
+            // Populate form fields
+            document.getElementById('m3u_sources').value = config.m3u_sources.join('\n');
+            document.getElementById('parser_schedule_crontab').value = config.parser_schedule_crontab;
+            document.getElementById('host_url').value = config.host_url;
+            document.getElementById('addon_password').value = config.addon_password || '';
+
+            alert('Configuration loaded successfully! You can now update the fields.');
+        } catch (error) {
+            alert('Error: ' + error.message);
+        } finally {
+            loadConfigBtn.disabled = false;
+            loadConfigBtn.textContent = 'Load Configuration';
+        }
+    });
+
     const configForm = document.getElementById('config-form');
     if (configForm) {
         configForm.addEventListener('submit', async (event) => {
             event.preventDefault();
             const spinner = document.querySelector('.spinner-border');
             spinner.style.display = 'inline-block';
-            const manifestUrl = await getManifestUrl(true);
+            
+            const isUpdateMode = modeUpdate.checked;
+            const manifestUrl = isUpdateMode 
+                ? await updateConfiguration() 
+                : await getManifestUrl(true);
+            
             if (manifestUrl) {
-                window.location.href = manifestUrl;
+                if (!isUpdateMode) {
+                    window.location.href = manifestUrl;
+                } else {
+                    displayFallbackUrl(manifestUrl);
+                    alert('Configuration updated successfully!');
+                }
             }
             spinner.style.display = 'none';
         });
@@ -122,6 +199,62 @@ function generateQRCode(url) {
     qr.addData(url);
     qr.make();
     document.getElementById('qrcode').innerHTML = qr.createImgTag(4);
+}
+
+async function updateConfiguration() {
+    const secretStr = document.getElementById('secret_str').value.trim();
+    if (!secretStr) {
+        alert('Please enter your secret_str');
+        return null;
+    }
+
+    const m3uSources = document.getElementById('m3u_sources').value.split('\n').filter(url => url.trim() !== '');
+    const parserScheduleCrontab = document.getElementById('parser_schedule_crontab').value.trim();
+    const hostUrl = document.getElementById('host_url').value.trim();
+    const addonPassword = document.getElementById('addon_password').value;
+
+    // Build update payload - only include fields that have values
+    // Empty string for password means remove password
+    const data = {};
+    if (m3uSources.length > 0) data.m3u_sources = m3uSources;
+    if (parserScheduleCrontab) data.parser_schedule_crontab = parserScheduleCrontab;
+    if (hostUrl) data.host_url = hostUrl;
+    // Always include password field - empty string means remove, undefined means don't change
+    // But since we're updating, we should send the current value (even if empty)
+    data.addon_password = addonPassword || '';
+
+    try {
+        const response = await fetch(`/${secretStr}/configure`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(data)
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || 'An unknown error occurred.');
+        }
+
+        const result = await response.json();
+        const manifestUrl = `${hostUrl.replace(/^https?:\/\//, '')}/${secretStr}/manifest.json`;
+        
+        return manifestUrl;
+
+    } catch (error) {
+        alert('Error: ' + error.message);
+        return null;
+    }
+}
+
+function clearForm() {
+    document.getElementById('m3u_sources').value = '';
+    document.getElementById('parser_schedule_crontab').value = '0 */6 * * *';
+    document.getElementById('host_url').value = window.location.origin;
+    document.getElementById('addon_password').value = '';
+    document.getElementById('secret_str').value = '';
+    document.getElementById('result').style.display = 'none';
 }
 
 function copyToClipboard(text) {

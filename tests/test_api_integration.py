@@ -113,6 +113,91 @@ def test_configure_invalid_data(redis_store_fixture: RedisStore):
         )
         assert response.status_code == 422
 
+def test_update_configure(redis_store_fixture: RedisStore):
+    with TestClient(app) as client:
+        # First, create a configuration
+        response = client.post(
+            "/configure",
+            json={
+                "m3u_sources": ["http://example.com/playlist1.m3u"],
+                "parser_schedule_crontab": "0 */6 * * *",
+                "host_url": "http://test-host.com",
+                "addon_password": "original_password"
+            }
+        )
+        assert response.status_code == 200
+        secret_str = response.json()["secret_str"]
+        
+        # Verify original configuration
+        original_user_data = redis_store_fixture.get_user_data(secret_str)
+        assert original_user_data.m3u_sources == ["http://example.com/playlist1.m3u"]
+        assert original_user_data.parser_schedule_crontab == "0 */6 * * *"
+        assert original_user_data.addon_password == "original_password"
+        
+        # Update only m3u_sources
+        response = client.put(
+            f"/{secret_str}/configure",
+            json={
+                "m3u_sources": ["http://example.com/playlist2.m3u", "http://example.com/playlist3.m3u"]
+            }
+        )
+        assert response.status_code == 200
+        result = response.json()
+        assert result["secret_str"] == secret_str
+        assert result["updated_fields"]["m3u_sources"] == True
+        assert result["updated_fields"]["parser_schedule_crontab"] == False
+        
+        # Verify updated configuration
+        updated_user_data = redis_store_fixture.get_user_data(secret_str)
+        assert updated_user_data.m3u_sources == ["http://example.com/playlist2.m3u", "http://example.com/playlist3.m3u"]
+        assert updated_user_data.parser_schedule_crontab == "0 */6 * * *"  # Unchanged
+        assert updated_user_data.addon_password == "original_password"  # Unchanged
+        
+        # Update cron expression and password
+        response = client.patch(
+            f"/{secret_str}/configure",
+            json={
+                "parser_schedule_crontab": "0 0 * * *",
+                "addon_password": "new_password"
+            }
+        )
+        assert response.status_code == 200
+        
+        # Verify updated configuration
+        updated_user_data = redis_store_fixture.get_user_data(secret_str)
+        assert updated_user_data.m3u_sources == ["http://example.com/playlist2.m3u", "http://example.com/playlist3.m3u"]  # Unchanged
+        assert updated_user_data.parser_schedule_crontab == "0 0 * * *"  # Updated
+        assert updated_user_data.addon_password == "new_password"  # Updated
+        
+        # Test update with invalid secret_str
+        response = client.put(
+            "/invalid_secret/configure",
+            json={
+                "m3u_sources": ["http://example.com/playlist.m3u"]
+            }
+        )
+        assert response.status_code == 404
+        
+        # Test update with invalid cron expression
+        response = client.put(
+            f"/{secret_str}/configure",
+            json={
+                "parser_schedule_crontab": "invalid cron"
+            }
+        )
+        assert response.status_code == 422
+        
+        # Test removing password (set to empty string)
+        response = client.put(
+            f"/{secret_str}/configure",
+            json={
+                "addon_password": ""
+            }
+        )
+        assert response.status_code == 200
+        updated_user_data = redis_store_fixture.get_user_data(secret_str)
+        assert updated_user_data.addon_password is None
+
 def test_catalog_meta_stream_endpoints(redis_store_fixture: RedisStore):
     with TestClient(app) as client:
         # Configure a user first

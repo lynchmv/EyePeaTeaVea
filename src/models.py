@@ -14,6 +14,21 @@ class ConfigureRequest(BaseModel):
         """Validate that the cron expression is valid."""
         return validate_cron_expression(v)
 
+class UpdateConfigureRequest(BaseModel):
+    """Request model for updating existing configuration. All fields are optional."""
+    m3u_sources: Optional[List[str]] = Field(None, min_length=1)
+    parser_schedule_crontab: Optional[str] = None
+    host_url: Optional[HttpUrl] = None
+    addon_password: Optional[str] = None
+    
+    @field_validator('parser_schedule_crontab')
+    @classmethod
+    def validate_cron(cls, v: Optional[str]) -> Optional[str]:
+        """Validate that the cron expression is valid if provided."""
+        if v is not None:
+            return validate_cron_expression(v)
+        return v
+
 class UserData(BaseModel):
     m3u_sources: list[str]
     parser_schedule_crontab: str = "0 */6 * * *"
