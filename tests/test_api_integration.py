@@ -112,6 +112,50 @@ def test_configure_invalid_data(redis_store_fixture: RedisStore):
             }
         )
         assert response.status_code == 422
+        
+        # Test with invalid M3U source URL (not a valid URL)
+        response = client.post(
+            "/configure",
+            json={
+                "m3u_sources": ["not-a-url"],
+                "host_url": "http://test-host.com"
+            }
+        )
+        assert response.status_code == 422
+        assert "invalid url" in response.json()["detail"][0]["msg"].lower()
+        
+        # Test with empty M3U source
+        response = client.post(
+            "/configure",
+            json={
+                "m3u_sources": [""],
+                "host_url": "http://test-host.com"
+            }
+        )
+        assert response.status_code == 422
+        
+        # Test with too many M3U sources (over limit)
+        too_many_sources = [f"http://example.com/playlist{i}.m3u" for i in range(51)]
+        response = client.post(
+            "/configure",
+            json={
+                "m3u_sources": too_many_sources,
+                "host_url": "http://test-host.com"
+            }
+        )
+        assert response.status_code == 422
+        assert "maximum" in response.json()["detail"][0]["msg"].lower()
+        
+        # Test with unsupported URL scheme (ftp)
+        response = client.post(
+            "/configure",
+            json={
+                "m3u_sources": ["ftp://example.com/playlist.m3u"],
+                "host_url": "http://test-host.com"
+            }
+        )
+        assert response.status_code == 422
+        assert "unsupported scheme" in response.json()["detail"][0]["msg"].lower()
 
 def test_update_configure(redis_store_fixture: RedisStore):
     with TestClient(app) as client:

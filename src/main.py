@@ -1,12 +1,12 @@
 import os
 import json
 import logging
-from fastapi import FastAPI, HTTPException, Response, Depends
+from fastapi import FastAPI, HTTPException, Response, Depends, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from urllib.parse import urljoin
 
@@ -72,6 +72,82 @@ app.add_middleware(
     allow_headers=["*"],  # Allow all headers (needed for Stremio addon compatibility)
 )
 
+def get_client_identifier(request: Request) -> str:
+    """Get a unique identifier for rate limiting based on client IP."""
+    # Try to get real IP from headers (for proxies/load balancers)
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        # Take the first IP in the chain
+        client_ip = forwarded_for.split(",")[0].strip()
+    else:
+        client_ip = request.client.host if request.client else "unknown"
+    
+    return f"rate_limit:{client_ip}"
+
+async def rate_limit_dependency(request: Request) -> None:
+    """
+    Rate limiting dependency for /configure endpoint.
+    Limits to 10 requests per hour per IP address.
+    """
+    await check_rate_limit(request, limit=10, window_seconds=3600)
+
+async def check_rate_limit(
+    request: Request,
+    limit: int = 10,
+    window_seconds: int = 3600
+) -> None:
+    """
+    Rate limiting dependency using Redis sliding window.
+    
+    Args:
+        request: FastAPI request object
+        limit: Maximum number of requests allowed in the window (default: 10)
+        window_seconds: Time window in seconds (default: 1 hour = 3600s)
+        
+    Raises:
+        HTTPException: If rate limit is exceeded (HTTP 429)
+    """
+    try:
+        client_id = get_client_identifier(request)
+        rate_limit_key = f"{client_id}"
+        
+        # Get current count from Redis
+        current_count_bytes = redis_store.get(rate_limit_key)
+        
+        if current_count_bytes is None:
+            # First request in window - initialize counter
+            redis_store.set(rate_limit_key, b"1", expiration_time=window_seconds)
+            return
+        
+        # Decode and check count
+        try:
+            count = int(current_count_bytes.decode('utf-8'))
+        except (ValueError, AttributeError):
+            # Invalid data, reset counter
+            redis_store.set(rate_limit_key, b"1", expiration_time=window_seconds)
+            return
+        
+        if count >= limit:
+            logger.warning(f"Rate limit exceeded for {client_id}: {count}/{limit} requests in {window_seconds}s")
+            raise HTTPException(
+                status_code=429,
+                detail=f"Rate limit exceeded. Maximum {limit} requests per {window_seconds // 60} minutes. Please try again later."
+            )
+        
+        # Increment counter (Redis will maintain expiration from first set)
+        redis_store.set(rate_limit_key, str(count + 1).encode(), expiration_time=window_seconds)
+        
+    except HTTPException:
+        raise
+    except RedisConnectionError:
+        # If Redis is unavailable, allow the request but log a warning
+        logger.warning("Redis unavailable for rate limiting, allowing request")
+        return
+    except Exception as e:
+        # If rate limiting fails for any reason, log but don't block the request
+        logger.error(f"Rate limiting error: {e}")
+        return
+
 async def get_user_data_dependency(secret_str: str) -> UserData:
     try:
         user_data = redis_store.get_user_data(secret_str)
@@ -112,10 +188,11 @@ async def health_check():
             "error": str(e)
         }
 
-@app.post("/configure")
+@app.post("/configure", dependencies=[Depends(rate_limit_dependency)])
 async def configure_addon(
     request: ConfigureRequest
 ):
+    """Configure a new addon instance. Rate limited to 10 requests per hour per IP."""
     try:
         secret_str = generate_secret_str()
         user_data = UserData(
