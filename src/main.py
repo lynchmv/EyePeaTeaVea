@@ -44,12 +44,32 @@ app = FastAPI(lifespan=lifespan)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# CORS configuration
+# Note: Stremio recommends using "*" for allow_origins because Stremio clients come from
+# various origins (web, mobile, smart TV, etc.) and may not send a web-page origin.
+# However, we make it configurable for deployments that need stricter security.
+cors_allowed_origins_env = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
+if cors_allowed_origins_env:
+    if cors_allowed_origins_env == "*":
+        # Explicit wildcard
+        cors_allowed_origins = ["*"]
+        logger.info("CORS configured to allow all origins (*)")
+    else:
+        # Parse comma-separated list and strip whitespace
+        cors_allowed_origins = [origin.strip() for origin in cors_allowed_origins_env.split(",") if origin.strip()]
+        logger.info(f"CORS configured with allowed origins: {cors_allowed_origins}")
+else:
+    # Default: Allow all origins (recommended for Stremio addon compatibility)
+    # Stremio clients may come from various origins and may not send a web-page origin
+    cors_allowed_origins = ["*"]
+    logger.info("CORS using default: allow all origins (*) - recommended for Stremio addon compatibility")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=cors_allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["GET", "POST", "OPTIONS"],  # Restrict to needed methods
+    allow_headers=["*"],  # Allow all headers (needed for Stremio addon compatibility)
 )
 
 async def get_user_data_dependency(secret_str: str) -> UserData:
