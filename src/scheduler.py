@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from .m3u_parser import M3UParser
 from .redis_store import RedisStore
 from .models import UserData
+from .utils import validate_cron_expression
 
 load_dotenv()
 
@@ -62,12 +63,13 @@ class Scheduler:
 
     def _parse_cron_expression(self, cron_str: str) -> CronTrigger:
         """Parses a cron expression string into a CronTrigger object."""
+        # Validate the cron expression first (raises ValueError if invalid)
+        validated_cron = validate_cron_expression(cron_str)
+        
+        # Parse into CronTrigger
         # Cron format: "minute hour day month day-of-week"
         # Example: "0 */6 * * *" means every 6 hours
-        parts = cron_str.strip().split()
-        if len(parts) != 5:
-            raise ValueError(f"Invalid cron expression format. Expected 5 fields, got {len(parts)}: {cron_str}")
-        
+        parts = validated_cron.split()
         minute, hour, day, month, day_of_week = parts
         return CronTrigger(minute=minute, hour=hour, day=day, month=month, day_of_week=day_of_week)
 

@@ -78,6 +78,30 @@ def test_configure_invalid_data(redis_store_fixture: RedisStore):
         )
         assert response.status_code == 422
 
+        # Test with invalid cron expression (too few fields)
+        response = client.post(
+            "/configure",
+            json={
+                "m3u_sources": ["http://example.com/playlist.m3u"],
+                "parser_schedule_crontab": "0 0",
+                "host_url": "http://test-host.com"
+            }
+        )
+        assert response.status_code == 422
+        assert "cron expression" in response.json()["detail"][0]["msg"].lower()
+
+        # Test with invalid cron expression (invalid field value)
+        response = client.post(
+            "/configure",
+            json={
+                "m3u_sources": ["http://example.com/playlist.m3u"],
+                "parser_schedule_crontab": "60 0 * * *",  # Invalid: minute > 59
+                "host_url": "http://test-host.com"
+            }
+        )
+        assert response.status_code == 422
+        assert "cron expression" in response.json()["detail"][0]["msg"].lower()
+
         # Test with invalid host_url (not a valid URL)
         response = client.post(
             "/configure",
