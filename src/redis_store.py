@@ -165,10 +165,10 @@ class RedisStore:
                 tvg_id = channel["tvg_id"]
                 if channel.get("is_event") and channel.get("event_datetime_full"):
                     try:
-                    event_dt = datetime.strptime(channel["event_datetime_full"], "%Y-%m-%d %H:%M:%S")
-                    event_dt = pytz.utc.localize(event_dt)
-                    # Add expiration hours to the event time for expiration
-                    expiration_dt = event_dt + timedelta(hours=EVENT_EXPIRATION_HOURS)
+                        event_dt = datetime.strptime(channel["event_datetime_full"], "%Y-%m-%d %H:%M:%S")
+                        event_dt = pytz.utc.localize(event_dt)
+                        # Add expiration hours to the event time for expiration
+                        expiration_dt = event_dt + timedelta(hours=EVENT_EXPIRATION_HOURS)
                         now = datetime.now(pytz.utc)
                         if expiration_dt > now:
                             expiration_time_seconds = int((expiration_dt - now).total_seconds())
