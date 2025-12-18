@@ -1,3 +1,19 @@
+"""
+FastAPI application for EyePeaTeaVea Stremio addon.
+
+This module defines the main FastAPI application with all API endpoints:
+- Configuration endpoints (/configure, /{secret_str}/configure)
+- Stremio protocol endpoints (/manifest.json, /catalog, /meta, /stream)
+- Image endpoints (/poster, /background, /logo, /icon)
+- Health check endpoint (/health)
+- Frontend web UI (/frontend)
+
+Features:
+- Multi-user support via secret_str
+- Rate limiting on configuration endpoint
+- CORS configuration for Stremio compatibility
+- Automatic M3U playlist fetching and scheduling
+"""
 import os
 import json
 import logging
@@ -5,7 +21,6 @@ from fastapi import FastAPI, HTTPException, Response, Depends, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from typing import Optional
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from urllib.parse import urljoin
@@ -26,6 +41,21 @@ from contextlib import asynccontextmanager
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 HOST_URL = os.getenv("HOST_URL", "http://localhost:8020")
+
+# Addon configuration constants
+ADDON_ID = os.getenv("ADDON_ID", "org.stremio.eyepeateavea")
+ADDON_VERSION = os.getenv("ADDON_VERSION", "1.0.0")
+ADDON_NAME = os.getenv("ADDON_NAME", "EyePeaTeaVea")
+ADDON_DESCRIPTION = os.getenv("ADDON_DESCRIPTION", "Stremio addon for M3U playlists")
+ADDON_ID_PREFIX = os.getenv("ADDON_ID_PREFIX", "eyepeateavea")
+
+# Constants
+EVENT_HASH_SUFFIX_LENGTH = 10  # Length of hash suffix used for event unique IDs
+SERVICE_NAME = "EyePeaTeaVea"
+
+# Rate limiting constants
+RATE_LIMIT_REQUESTS = 10  # Maximum requests per window
+RATE_LIMIT_WINDOW_SECONDS = 3600  # Time window in seconds (1 hour)
 
 redis_store = RedisStore(REDIS_URL)
 scheduler = Scheduler()
@@ -87,9 +117,9 @@ def get_client_identifier(request: Request) -> str:
 async def rate_limit_dependency(request: Request) -> None:
     """
     Rate limiting dependency for /configure endpoint.
-    Limits to 10 requests per hour per IP address.
+    Limits to RATE_LIMIT_REQUESTS requests per RATE_LIMIT_WINDOW_SECONDS per IP address.
     """
-    await check_rate_limit(request, limit=10, window_seconds=3600)
+    await check_rate_limit(request, limit=RATE_LIMIT_REQUESTS, window_seconds=RATE_LIMIT_WINDOW_SECONDS)
 
 async def check_rate_limit(
     request: Request,
@@ -171,20 +201,20 @@ async def health_check():
             return {
                 "status": "healthy",
                 "redis": "connected",
-                "service": "EyePeaTeaVea"
+                "service": SERVICE_NAME
             }
         else:
             return {
                 "status": "degraded",
                 "redis": "disconnected",
-                "service": "EyePeaTeaVea"
+                "service": SERVICE_NAME
             }
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         return {
             "status": "unhealthy",
             "redis": "error",
-            "service": "EyePeaTeaVea",
+            "service": SERVICE_NAME,
             "error": str(e)
         }
 
@@ -299,12 +329,6 @@ async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_d
         except json.JSONDecodeError as e:
             logger.error(f"Error decoding channel JSON from Redis: {e} - {channel_json}")
 
-    ADDON_ID = os.getenv("ADDON_ID", "org.stremio.eyepeateavea")
-    ADDON_VERSION = os.getenv("ADDON_VERSION", "1.0.0")
-    ADDON_NAME = os.getenv("ADDON_NAME", "EyePeaTeaVea")
-    ADDON_DESCRIPTION = os.getenv("ADDON_DESCRIPTION", "Stremio addon for M3U playlists")
-    ADDON_ID_PREFIX = os.getenv("ADDON_ID_PREFIX", "eyepeateavea")
-
     manifest = {
         "id": ADDON_ID,
         "version": ADDON_VERSION,
@@ -384,7 +408,7 @@ async def get_icon_image(secret_str: str, tvg_id: str, user_data: UserData = Dep
     # For the manifest icon, we use a static logo. For channel icons, we use the channel's logo.
     if tvg_id == "logo":
         image_url = f"{HOST_URL}/icon/logo.png"
-        channel_name = os.getenv("ADDON_NAME", "EyePeaTeaVea")
+        channel_name = ADDON_NAME
     else:
         channel_json = redis_store.get_channel(secret_str, tvg_id)
         if not channel_json:
@@ -405,7 +429,7 @@ async def get_catalog(
     type: str,
     id: str,
     user_data: UserData = Depends(get_user_data_dependency),
-    extra: Optional[str] = None
+    extra: str | None = None
 ):
     extra_name = None
     extra_value = None
@@ -422,9 +446,6 @@ async def get_catalog(
             
         filtered_channels = filter_channels(channels_data, type, extra_name, extra_value)
         
-        ADDON_ID_PREFIX = os.getenv("ADDON_ID_PREFIX", "eyepeateavea")
-        HOST_URL = os.getenv("HOST_URL", "http://localhost:8020")
-        
         metas = [create_meta(channel, secret_str, ADDON_ID_PREFIX, HOST_URL) for channel in filtered_channels]
         
         return {"metas": metas}
@@ -433,9 +454,6 @@ async def get_catalog(
 
 @app.get("/{secret_str}/meta/{type}/{id}.json")
 async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = Depends(get_user_data_dependency)):
-    ADDON_ID_PREFIX = os.getenv("ADDON_ID_PREFIX", "eyepeateavea")
-    HOST_URL = os.getenv("HOST_URL", "http://localhost:8020")
-
     if type == "events" and id.startswith(f"{ADDON_ID_PREFIX}_event_"):
         parts = id.split('_')
         tvg_id = parts[2]
@@ -446,7 +464,7 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
             channel = json.loads(channel_json)
             if channel.get("is_event"):
                 import hashlib
-                current_event_hash_suffix = hashlib.sha256(channel["event_title"].encode()).hexdigest()[:10]
+                current_event_hash_suffix = hashlib.sha256(channel["event_title"].encode()).hexdigest()[:EVENT_HASH_SUFFIX_LENGTH]
                 if current_event_hash_suffix == event_hash_suffix:
                     meta = create_meta(channel, secret_str, ADDON_ID_PREFIX, HOST_URL)
                     meta.update({"runtime": "", "releaseInfo": "", "links": []})
@@ -466,8 +484,6 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
 async def get_stream(secret_str: str, type: str, id: str, user_data: UserData = Depends(get_user_data_dependency)):
     logger.info(f"Stream endpoint accessed for secret_str: {secret_str}, type: {type}, id: {id}")
     
-    ADDON_ID_PREFIX = os.getenv("ADDON_ID_PREFIX", "eyepeateavea")
-
     if (type == "tv" or type == "events") and (id.startswith(f"{ADDON_ID_PREFIX}_event_") or id.startswith(ADDON_ID_PREFIX)):
         if id.startswith(f"{ADDON_ID_PREFIX}_event_"):
             parts = id.split('_')

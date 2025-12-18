@@ -1,3 +1,12 @@
+"""
+Utility functions for secret generation, hashing, and validation.
+
+This module provides helper functions for:
+- Generating secure random strings for user identification
+- Hashing secrets for secure storage
+- Validating cron expressions
+- Validating URLs
+"""
 import secrets
 import hashlib
 from urllib.parse import urlparse

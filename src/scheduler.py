@@ -1,3 +1,10 @@
+"""
+Scheduler module for managing background M3U playlist fetching.
+
+This module provides a Scheduler class that uses APScheduler to periodically
+fetch M3U playlists from configured sources and store the parsed channels
+in Redis. Each user can have their own cron schedule for updates.
+"""
 import os
 import redis
 import logging
@@ -18,12 +25,34 @@ logger = logging.getLogger(__name__)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 class Scheduler:
-    def __init__(self):
+    """
+    Manages scheduled background tasks for fetching M3U playlists.
+    
+    Uses APScheduler to schedule periodic M3U playlist fetches based on
+    user-configured cron expressions. Each user can have their own schedule.
+    
+    Attributes:
+        redis_store: RedisStore instance for data access
+        scheduler: BackgroundScheduler instance for managing jobs
+    """
+    def __init__(self) -> None:
+        """
+        Initialize the Scheduler with Redis connection and background scheduler.
+        """
         self.redis_store = RedisStore(REDIS_URL)
         self.scheduler = BackgroundScheduler()
 
-    def _fetch_and_store_m3u(self, secret_str: str, user_data: UserData):
-        """Fetches M3U playlists from all sources and stores channels in Redis."""
+    def _fetch_and_store_m3u(self, secret_str: str, user_data: UserData) -> None:
+        """
+        Fetch M3U playlists from all configured sources and store channels in Redis.
+        
+        Processes all M3U sources for a user, parses channels, and stores them.
+        Continues processing other sources even if one fails.
+        
+        Args:
+            secret_str: User's unique secret string
+            user_data: UserData containing M3U sources and configuration
+        """
         logger.info(f"Starting scheduled M3U fetch for secret_str: {secret_str}")
         all_channels_list = []
         errors = []
@@ -53,20 +82,56 @@ class Scheduler:
         if errors:
             logger.warning(f"Encountered {len(errors)} errors during M3U fetch for secret_str: {secret_str}")
 
-    def _scheduled_fetch_wrapper(self, secret_str: str):
-        """Wrapper function for scheduled jobs that retrieves user_data from Redis."""
+    def _scheduled_fetch_wrapper(self, secret_str: str) -> None:
+        """
+        Wrapper function for scheduled jobs that retrieves user_data from Redis.
+        
+        This is called by APScheduler. It fetches the current user_data from Redis
+        and then triggers the M3U fetch. This ensures we always use the latest
+        configuration even if it was updated after scheduling.
+        
+        Args:
+            secret_str: User's unique secret string
+        """
         user_data = self.redis_store.get_user_data(secret_str)
         if not user_data:
             logger.error(f"User data not found for secret_str: {secret_str}. Skipping scheduled fetch.")
             return
         self._fetch_and_store_m3u(secret_str, user_data)
 
-    def trigger_m3u_fetch_for_user(self, secret_str: str, user_data: UserData):
-        """Immediately triggers an M3U fetch for a user (used during configuration)."""
+    def trigger_m3u_fetch_for_user(self, secret_str: str, user_data: UserData) -> None:
+        """
+        Immediately trigger an M3U fetch for a user.
+        
+        Used during initial configuration to fetch channels right away,
+        rather than waiting for the next scheduled run.
+        
+        Args:
+            secret_str: User's unique secret string
+            user_data: UserData containing M3U sources and configuration
+        """
         self._fetch_and_store_m3u(secret_str, user_data)
 
     def _parse_cron_expression(self, cron_str: str) -> CronTrigger:
-        """Parses a cron expression string into a CronTrigger object."""
+        """
+        Parse a cron expression string into a CronTrigger object.
+        
+        Validates the cron expression and converts it to an APScheduler
+        CronTrigger for scheduling jobs.
+        
+        Args:
+            cron_str: Cron expression in format "minute hour day month day-of-week"
+            
+        Returns:
+            CronTrigger object for use with APScheduler
+            
+        Raises:
+            ValueError: If the cron expression is invalid
+            
+        Examples:
+            >>> scheduler._parse_cron_expression("0 */6 * * *")
+            <CronTrigger ...>
+        """
         # Validate the cron expression first (raises ValueError if invalid)
         validated_cron = validate_cron_expression(cron_str)
         
@@ -77,8 +142,15 @@ class Scheduler:
         minute, hour, day, month, day_of_week = parts
         return CronTrigger(minute=minute, hour=hour, day=day, month=month, day_of_week=day_of_week)
 
-    def start_scheduler(self):
-        """Starts the scheduler and adds jobs for all configured users."""
+    def start_scheduler(self) -> None:
+        """
+        Start the scheduler and add jobs for all configured users.
+        
+        Removes all existing jobs, starts the scheduler if not running,
+        and creates scheduled jobs for each user based on their cron expression.
+        Logs warnings for users with invalid configurations but continues
+        processing other users.
+        """
         logger.info("Scheduler start_scheduler method called.")
         
         # Remove all existing jobs before adding new ones
@@ -133,8 +205,13 @@ class Scheduler:
         
         logger.info(f"Scheduler initialization complete. Added {jobs_added} jobs, {jobs_failed} failed.")
 
-    def stop_scheduler(self):
-        """Stops the scheduler gracefully."""
+    def stop_scheduler(self) -> None:
+        """
+        Stop the scheduler gracefully.
+        
+        Shuts down the background scheduler, allowing running jobs to complete.
+        Safe to call even if scheduler is not running.
+        """
         if self.scheduler.running:
             self.scheduler.shutdown()
             logger.info("Scheduler stopped.")

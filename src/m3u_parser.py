@@ -1,3 +1,13 @@
+"""
+M3U playlist parser for extracting channel and event information.
+
+This module provides functionality to parse M3U playlists and extract:
+- Channel metadata (name, logo, group, etc.)
+- Event information (sports events with dates/times)
+- Stream URLs
+
+Handles various M3U formats and timezone conversions.
+"""
 import re
 import requests
 import os
@@ -17,14 +27,29 @@ logger = logging.getLogger(__name__)
 HOST_URL = os.getenv("HOST_URL", "http://localhost:8020")
 
 class M3UParser:
+    """
+    Parser for M3U playlist files.
+    
+    Parses M3U playlists from URLs or local files and extracts channel
+    and event information. Handles timezone conversion and event detection.
+    
+    Attributes:
+        m3u_source: URL or file path to the M3U playlist
+    """
     def __init__(self, m3u_source: str):
         self.m3u_source = m3u_source
 
-    def extract_event_datetime(self, tvg_name: str):
+    def extract_event_datetime(self, tvg_name: str) -> datetime | None:
         """
         Extract and parse the most relevant datetime from messy TVG-style event strings.
         Prefers US time zones (EST/EDT > CST/CDT > MST/MDT > PST/PDT > UK/UTC)
         and returns a UTC-aware datetime for consistency.
+        
+        Args:
+            tvg_name: TVG-style event string containing date/time information
+            
+        Returns:
+            UTC-aware datetime object if parsing succeeds, None otherwise
         """
         import re, dateparser, pytz
         from datetime import datetime
@@ -69,7 +94,7 @@ class M3UParser:
 
         # LYNCH
         if re.search(r"\(\d{1,2}:\d{2}", s):
-            s = re.sub("\(\d{1,2}:\d{2}", "\(", s)
+            s = re.sub(r"\(\d{1,2}:\d{2}", r"\(", s)
 
         tz_map = {
             "UK": "UTC",

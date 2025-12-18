@@ -1,7 +1,15 @@
+"""
+Redis data store module for managing user data, channels, and image caching.
+
+This module provides a RedisStore class that handles all Redis operations
+with connection resilience, retry logic, and performance optimizations.
+Supports per-user channel storage and global image caching.
+"""
 import json
 import logging
 import time
 from datetime import datetime, timedelta
+from typing import Any
 import pytz
 import redis
 from redis.exceptions import ConnectionError, RedisError
@@ -15,18 +23,48 @@ IMAGE_CACHE_EXPIRATION_SECONDS = 60 * 60 * 24 * 7  # 7 days
 EVENT_EXPIRATION_HOURS = 4  # Hours after event time before expiration
 
 class RedisConnectionError(Exception):
-    """Raised when Redis operations fail due to connection issues."""
+    """
+    Exception raised when Redis operations fail due to connection issues.
+    
+    This exception is raised when Redis is unavailable or connection
+    cannot be established after retries.
+    """
     pass
 
 class RedisStore:
-    def __init__(self, redis_url, max_retries: int = 3, retry_delay: float = 1.0):
+    """
+    Redis data store with connection resilience and performance optimizations.
+    
+    Provides methods for storing and retrieving:
+    - User configurations (per-user)
+    - Channel data (per-user)
+    - Processed images (global cache)
+    
+    Features:
+    - Automatic connection retry with exponential backoff
+    - Connection health checks
+    - Batch operations for performance
+    - Graceful error handling
+    
+    Attributes:
+        redis_url: Redis connection URL
+        max_retries: Maximum connection retry attempts
+        retry_delay: Delay between retry attempts in seconds
+        redis_client: Redis client instance (None if not connected)
+    """
+    def __init__(
+        self, 
+        redis_url: str, 
+        max_retries: int = 3, 
+        retry_delay: float = 1.0
+    ) -> None:
         """
         Initialize Redis connection with retry logic.
         
         Args:
-            redis_url: Redis connection URL
-            max_retries: Maximum number of connection retry attempts
-            retry_delay: Delay in seconds between retry attempts
+            redis_url: Redis connection URL (e.g., "redis://localhost:6379/0")
+            max_retries: Maximum number of connection retry attempts (default: 3)
+            retry_delay: Delay in seconds between retry attempts (default: 1.0)
         """
         self.redis_url = redis_url
         self.max_retries = max_retries
@@ -34,8 +72,13 @@ class RedisStore:
         self.redis_client = None
         self._connect_with_retry()
     
-    def _connect_with_retry(self):
-        """Attempt to connect to Redis with retry logic."""
+    def _connect_with_retry(self) -> None:
+        """
+        Attempt to connect to Redis with retry logic.
+        
+        Tries to establish a connection up to max_retries times.
+        Sets redis_client to None if all attempts fail.
+        """
         for attempt in range(1, self.max_retries + 1):
             try:
                 # Enable connection pooling for better performance
@@ -58,8 +101,16 @@ class RedisStore:
                     logger.error(f"Could not connect to Redis at {self.redis_url} after {self.max_retries} attempts: {e}")
                     self.redis_client = None
     
-    def _ensure_connection(self):
-        """Ensure Redis connection is active, reconnect if needed."""
+    def _ensure_connection(self) -> None:
+        """
+        Ensure Redis connection is active, reconnect if needed.
+        
+        Checks if connection exists and is alive. Attempts to reconnect
+        if connection is lost. Raises RedisConnectionError if unable to connect.
+        
+        Raises:
+            RedisConnectionError: If Redis is not available after retries
+        """
         if self.redis_client is None:
             self._connect_with_retry()
         
@@ -85,8 +136,13 @@ class RedisStore:
         except (ConnectionError, RedisError):
             return False
 
-    def clear_all_user_data(self):
-        """Clear all user data. Uses scan_iter for better performance."""
+    def clear_all_user_data(self) -> None:
+        """
+        Clear all user data from Redis.
+        
+        Uses scan_iter for better performance instead of keys().
+        Deletes in batches to avoid blocking Redis.
+        """
         try:
             self._ensure_connection()
             keys_to_delete = []
@@ -113,7 +169,7 @@ class RedisStore:
             logger.error(f"Cannot get key {key}: {e}")
             return None
 
-    def set(self, key: str, value: bytes, expiration_time: int | None = None):
+    def set(self, key: str, value: bytes, expiration_time: int | None = None) -> None:
         """Stores a value in Redis with an optional expiration time."""
         try:
             self._ensure_connection()
@@ -122,7 +178,7 @@ class RedisStore:
             logger.error(f"Cannot set key {key}: {e}")
             raise
 
-    def store_user_data(self, secret_str: str, user_data: UserData):
+    def store_user_data(self, secret_str: str, user_data: UserData) -> None:
         """Stores user-specific configuration data in Redis."""
         try:
             self._ensure_connection()
@@ -144,7 +200,13 @@ class RedisStore:
             logger.error(f"Cannot get user data for {secret_str[:8]}...: {e}")
             return None
 
-    def store_channel(self, secret_str: str, tvg_id: str, channel_data: dict, expiration_time_seconds: int | None = None):
+    def store_channel(
+        self, 
+        secret_str: str, 
+        tvg_id: str, 
+        channel_data: dict, 
+        expiration_time_seconds: int | None = None
+    ) -> None:
         """Stores a single channel or event in Redis with an optional expiration time, scoped to a user."""
         try:
             self._ensure_connection()
@@ -155,7 +217,7 @@ class RedisStore:
             logger.error(f"Cannot store channel {tvg_id} for {secret_str[:8]}...: {e}")
             raise
 
-    def store_channels(self, secret_str: str, channels: list[dict]):
+    def store_channels(self, secret_str: str, channels: list[dict]) -> None:
         """Stores M3U channel data in Redis for a specific user, handling events with expiration."""
         try:
             self._ensure_connection()
@@ -201,7 +263,7 @@ class RedisStore:
             logger.error(f"Cannot get channel {tvg_id} for {secret_str[:8]}...: {e}")
             return None
 
-    def get_all_channels(self, secret_str: str) -> dict:
+    def get_all_channels(self, secret_str: str) -> dict[str, str]:
         """
         Retrieves all stored channels and events for a specific user.
         Uses scan_iter for better performance with large datasets.
@@ -240,7 +302,7 @@ class RedisStore:
             logger.error(f"Cannot get all channels for {secret_str[:8]}...: {e}")
             return {}
 
-    def clear_all_data(self):
+    def clear_all_data(self) -> None:
         """Clears all M3U data from Redis. Uses batch deletion for better performance."""
         try:
             self._ensure_connection()
@@ -268,7 +330,7 @@ class RedisStore:
             logger.error(f"Cannot clear all data: {e}")
             raise
     
-    def clear_user_channels(self, secret_str: str):
+    def clear_user_channels(self, secret_str: str) -> None:
         """Clears all channels and events for a specific user."""
         try:
             self._ensure_connection()
@@ -299,7 +361,7 @@ class RedisStore:
             logger.error(f"Cannot get all secret_strs: {e}")
             return []
 
-    def store_processed_image(self, cache_key: str, image_bytes: bytes):
+    def store_processed_image(self, cache_key: str, image_bytes: bytes) -> None:
         """Stores processed image bytes in Redis. Images are cached globally since the same channel logo produces the same processed image."""
         try:
             self._ensure_connection()

@@ -1,18 +1,52 @@
+"""
+Catalog utility functions for filtering channels and creating Stremio metadata.
+
+This module provides functions to filter channel data from Redis and create
+Stremio-compatible metadata objects for channels and events.
+"""
 import json
 import hashlib
-from typing import List, Dict, Optional
+from typing import Any
 
+# Constants
+EVENT_HASH_SUFFIX_LENGTH = 10  # Length of hash suffix used for event unique IDs
 
 
 def filter_channels(
-    channels_data: Dict[str, str],
+    channels_data: dict[str, str],
     channel_type: str,
-    extra_name: Optional[str] = None,
-    extra_value: Optional[str] = None,
-) -> List[Dict]:
+    extra_name: str | None = None,
+    extra_value: str | None = None,
+) -> list[dict[str, Any]]:
     """
-    Filters channels based on type and extra parameters.
-    Optimized to minimize JSON parsing and improve performance.
+    Filter channels based on type and optional extra parameters.
+    
+    This function filters channels from Redis data based on:
+    - Channel type (tv or events)
+    - Optional genre filter (for group_title or event_sport)
+    - Optional search filter (case-insensitive text search)
+    
+    Optimized to minimize JSON parsing by parsing each channel only once.
+    
+    Args:
+        channels_data: Dictionary mapping channel IDs to JSON-encoded channel data
+        channel_type: Type of channels to filter ("tv" or "events")
+        extra_name: Optional filter type ("genre" or "search")
+        extra_value: Optional filter value (genre name or search term)
+        
+    Returns:
+        List of filtered channel dictionaries, sorted by name/title
+        
+    Examples:
+        >>> channels = {"CNN": '{"tvg_id": "CNN", "group_title": "News", ...}'}
+        >>> filter_channels(channels, "tv")
+        [{"tvg_id": "CNN", ...}]
+        
+        >>> filter_channels(channels, "tv", "genre", "News")
+        [{"tvg_id": "CNN", ...}]
+        
+        >>> filter_channels(channels, "tv", "search", "CNN")
+        [{"tvg_id": "CNN", ...}]
     """
     filtered_channels = []
     is_search = extra_name == "search" and extra_value
@@ -67,15 +101,49 @@ def filter_channels(
     return filtered_channels
 
 
-def create_meta(channel: Dict, secret_str: str, addon_id_prefix: str, host_url: str) -> Dict:
+def create_meta(
+    channel: dict[str, Any], 
+    secret_str: str, 
+    addon_id_prefix: str, 
+    host_url: str
+) -> dict[str, Any]:
     """
-    Creates a meta object for a channel.
+    Create a Stremio-compatible metadata object for a channel or event.
+    
+    This function generates metadata including:
+    - Unique ID based on channel/event type
+    - Image URLs (poster, background, logo)
+    - Description and genres
+    - Type classification (tv or events)
+    
+    Args:
+        channel: Channel dictionary containing channel/event data
+        secret_str: User's secret string for URL generation
+        addon_id_prefix: Prefix for generating unique IDs (e.g., "eyepeateavea")
+        host_url: Base URL for generating image URLs
+        
+    Returns:
+        Dictionary containing Stremio metadata with keys:
+        - id: Unique identifier
+        - type: "tv" or "events"
+        - name: Channel/event name
+        - poster: URL to poster image
+        - posterShape: "portrait"
+        - background: URL to background image
+        - logo: URL to logo image
+        - description: Channel/event description
+        - genres: List of genre strings
+        
+    Examples:
+        >>> channel = {"tvg_id": "CNN", "tvg_name": "CNN", "group_title": "News", ...}
+        >>> create_meta(channel, "abc123", "eyepeateavea", "http://localhost:8020")
+        {"id": "eyepeateaveaCNN", "type": "tv", "name": "CNN", ...}
     """
     is_event = channel.get("is_event", False)
     channel_type = "events" if is_event else "tv"
 
     if is_event:
-        event_unique_id_suffix = hashlib.sha256(channel["event_title"].encode()).hexdigest()[:10]
+        event_unique_id_suffix = hashlib.sha256(channel["event_title"].encode()).hexdigest()[:EVENT_HASH_SUFFIX_LENGTH]
         meta_id = f"{addon_id_prefix}_event_{channel['tvg_id']}_{event_unique_id_suffix}"
         name = channel["event_title"]
         description = channel["event_title"]

@@ -1,16 +1,30 @@
+"""
+Pydantic models for API request/response validation and data structures.
+
+This module defines all data models used throughout the application:
+- API request models (ConfigureRequest, UpdateConfigureRequest)
+- Internal data models (UserData, Channel, Event)
+- All models include validation logic for data integrity
+"""
 from pydantic import BaseModel, Field, HttpUrl, field_validator
-from typing import List, Optional
+from typing import Optional
 from .utils import validate_cron_expression, validate_url
 
 class ConfigureRequest(BaseModel):
-    m3u_sources: List[str] = Field(..., min_length=1, max_length=50)
+    """
+    Request model for initial addon configuration.
+    
+    All fields are required except addon_password. Includes validation
+    for M3U sources (URLs) and cron expressions.
+    """
+    m3u_sources: list[str] = Field(..., min_length=1, max_length=50)
     parser_schedule_crontab: str = "0 */6 * * *"
     host_url: HttpUrl
-    addon_password: Optional[str] = None
+    addon_password: str | None = None
     
     @field_validator('m3u_sources')
     @classmethod
-    def validate_m3u_sources(cls, v: List[str]) -> List[str]:
+    def validate_m3u_sources(cls, v: list[str]) -> list[str]:
         """Validate that all M3U sources are valid URLs."""
         if not v:
             raise ValueError("At least one M3U source is required")
@@ -35,14 +49,14 @@ class ConfigureRequest(BaseModel):
 
 class UpdateConfigureRequest(BaseModel):
     """Request model for updating existing configuration. All fields are optional."""
-    m3u_sources: Optional[List[str]] = Field(None, min_length=1, max_length=50)
-    parser_schedule_crontab: Optional[str] = None
-    host_url: Optional[HttpUrl] = None
-    addon_password: Optional[str] = None
+    m3u_sources: list[str] | None = Field(None, min_length=1, max_length=50)
+    parser_schedule_crontab: str | None = None
+    host_url: HttpUrl | None = None
+    addon_password: str | None = None
     
     @field_validator('m3u_sources')
     @classmethod
-    def validate_m3u_sources(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+    def validate_m3u_sources(cls, v: list[str] | None) -> list[str] | None:
         """Validate that all M3U sources are valid URLs if provided."""
         if v is None:
             return v
@@ -62,7 +76,7 @@ class UpdateConfigureRequest(BaseModel):
     
     @field_validator('parser_schedule_crontab')
     @classmethod
-    def validate_cron(cls, v: Optional[str]) -> Optional[str]:
+    def validate_cron(cls, v: str | None) -> str | None:
         """Validate that the cron expression is valid if provided."""
         if v is not None:
             return validate_cron_expression(v)
@@ -72,7 +86,7 @@ class UserData(BaseModel):
     m3u_sources: list[str]
     parser_schedule_crontab: str = "0 */6 * * *"
     host_url: HttpUrl
-    addon_password: Optional[str] = None
+    addon_password: str | None = None
 
 class Event(BaseModel):
     date: str
@@ -88,4 +102,4 @@ class Channel(BaseModel):
     tvg_logo: str
     url_tvg: str
     stream_url: str
-    events: List[Event] = Field(default_factory=list)
+    events: list[Event] = Field(default_factory=list)

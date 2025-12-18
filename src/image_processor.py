@@ -1,3 +1,11 @@
+"""
+Image processing utilities for generating and processing channel images.
+
+This module handles:
+- Placeholder image generation
+- Image fetching and caching
+- Image resizing and formatting for different use cases (poster, background, logo, icon)
+"""
 import os
 import httpx
 from io import BytesIO
@@ -7,6 +15,20 @@ from .redis_store import RedisStore
 
 logger = logging.getLogger(__name__)
 
+# Image dimension constants
+POSTER_WIDTH = 500
+POSTER_HEIGHT = 750
+BACKGROUND_WIDTH = 1024
+BACKGROUND_HEIGHT = 576
+LOGO_WIDTH = 500
+LOGO_HEIGHT = 500
+ICON_WIDTH = 256
+ICON_HEIGHT = 256
+
+# Placeholder image constants
+DEFAULT_PLACEHOLDER_WIDTH = 500
+DEFAULT_PLACEHOLDER_HEIGHT = 750
+
 # Define the generic placeholder URL
 GENERIC_PLACEHOLDER_URL = "https://via.placeholder.com/240x135.png?text=No+Logo"
 
@@ -14,8 +36,32 @@ GENERIC_PLACEHOLDER_URL = "https://via.placeholder.com/240x135.png?text=No+Logo"
 IMAGE_CACHE_EXPIRATION_SECONDS = 60 * 60 * 24 * 7  # 7 days
 IMAGE_FETCH_TIMEOUT_SECONDS = 10
 
-# Function to generate a default placeholder image
-def generate_placeholder_image(title: str = "No Logo", width: int = 500, height: int = 750, monochrome: bool = False) -> BytesIO:
+def generate_placeholder_image(
+    title: str = "No Logo", 
+    width: int = DEFAULT_PLACEHOLDER_WIDTH, 
+    height: int = DEFAULT_PLACEHOLDER_HEIGHT, 
+    monochrome: bool = False
+) -> BytesIO:
+    """
+    Generate a placeholder image with centered text.
+    
+    Creates a black image with white text centered on it. Tries to use
+    system fonts, falling back to default if none are available.
+    
+    Args:
+        title: Text to display on the placeholder image
+        width: Image width in pixels (default: DEFAULT_PLACEHOLDER_WIDTH)
+        height: Image height in pixels (default: DEFAULT_PLACEHOLDER_HEIGHT)
+        monochrome: If True, creates a grayscale image (default: False)
+        
+    Returns:
+        BytesIO object containing the generated image (PNG for monochrome, JPEG otherwise)
+        
+    Examples:
+        >>> img = generate_placeholder_image("CNN", POSTER_WIDTH, POSTER_HEIGHT)
+        >>> isinstance(img, BytesIO)
+        True
+    """
     if monochrome:
         img = Image.new('L', (width, height), color = 0) # Black background, grayscale
         text_color = 255 # White text
@@ -63,6 +109,24 @@ def generate_placeholder_image(title: str = "No Logo", width: int = 500, height:
     return byte_io
 
 async def fetch_image_content(redis_store: RedisStore, url: str) -> bytes:
+    """
+    Fetch image content from URL with caching support.
+    
+    Checks Redis cache first, then fetches from URL if not cached.
+    Caches successful fetches for future use.
+    
+    Args:
+        redis_store: RedisStore instance for caching
+        url: URL of the image to fetch
+        
+    Returns:
+        Image content as bytes, or empty bytes if fetch fails
+        
+    Examples:
+        >>> content = await fetch_image_content(redis_store, "http://example.com/logo.png")
+        >>> len(content) > 0
+        True
+    """
     cache_key = f"image_cache:{url}"
     cached_content = redis_store.get(cache_key)
     if cached_content:
@@ -90,7 +154,45 @@ async def fetch_image_content(redis_store: RedisStore, url: str) -> bytes:
         logger.warning(f"Error fetching image from {url}: {e}")
         return b''
 
-async def process_image(redis_store: RedisStore, tvg_id: str, image_url: str, title: str, width: int, height: int, image_type: str, monochrome: bool = False) -> BytesIO:
+async def process_image(
+    redis_store: RedisStore, 
+    tvg_id: str, 
+    image_url: str, 
+    title: str, 
+    width: int, 
+    height: int, 
+    image_type: str, 
+    monochrome: bool = False
+) -> BytesIO:
+    """
+    Process and resize an image for a specific use case.
+    
+    Processes images by:
+    1. Checking cache (shared across users for same channel/image_type)
+    2. Generating placeholder if URL is generic placeholder
+    3. Fetching image content
+    4. Resizing while maintaining aspect ratio
+    5. Centering on black background
+    6. Caching the result
+    
+    Args:
+        redis_store: RedisStore instance for caching
+        tvg_id: Channel identifier
+        image_url: URL of the image to process
+        title: Title for placeholder generation if fetch fails
+        width: Target width in pixels
+        height: Target height in pixels
+        image_type: Type of image ("poster", "background", "logo", "icon")
+        monochrome: If True, converts to grayscale (default: False)
+        
+    Returns:
+        BytesIO object containing the processed image
+        
+    Examples:
+        >>> img = await process_image(redis_store, "CNN", "http://...", "CNN", POSTER_WIDTH, POSTER_HEIGHT, "poster")
+        >>> isinstance(img, BytesIO)
+        True
+    """
     # Cache key is based on tvg_id and image_type, not user-specific
     # This allows sharing processed images across users since the same channel logo produces the same processed image
     cache_key = f"{tvg_id}_{image_type}"
@@ -149,13 +251,61 @@ async def process_image(redis_store: RedisStore, tvg_id: str, image_url: str, ti
         return processed_image
 
 async def get_poster(redis_store: RedisStore, tvg_id: str, image_url: str, title: str) -> BytesIO:
-    return await process_image(redis_store, tvg_id, image_url, title, 500, 750, "poster")
+    """
+    Get a poster image (portrait format).
+    
+    Args:
+        redis_store: RedisStore instance for caching
+        tvg_id: Channel identifier
+        image_url: URL of the image
+        title: Title for placeholder if needed
+        
+    Returns:
+        BytesIO object containing the poster image
+    """
+    return await process_image(redis_store, tvg_id, image_url, title, POSTER_WIDTH, POSTER_HEIGHT, "poster")
 
 async def get_background(redis_store: RedisStore, tvg_id: str, image_url: str, title: str) -> BytesIO:
-    return await process_image(redis_store, tvg_id, image_url, title, 1024, 576, "background")
+    """
+    Get a background image (widescreen format).
+    
+    Args:
+        redis_store: RedisStore instance for caching
+        tvg_id: Channel identifier
+        image_url: URL of the image
+        title: Title for placeholder if needed
+        
+    Returns:
+        BytesIO object containing the background image
+    """
+    return await process_image(redis_store, tvg_id, image_url, title, BACKGROUND_WIDTH, BACKGROUND_HEIGHT, "background")
 
 async def get_logo(redis_store: RedisStore, tvg_id: str, image_url: str, title: str) -> BytesIO:
-    return await process_image(redis_store, tvg_id, image_url, title, 500, 500, "logo")
+    """
+    Get a logo image (square format).
+    
+    Args:
+        redis_store: RedisStore instance for caching
+        tvg_id: Channel identifier
+        image_url: URL of the image
+        title: Title for placeholder if needed
+        
+    Returns:
+        BytesIO object containing the logo image
+    """
+    return await process_image(redis_store, tvg_id, image_url, title, LOGO_WIDTH, LOGO_HEIGHT, "logo")
 
 async def get_icon(redis_store: RedisStore, tvg_id: str, image_url: str, title: str) -> BytesIO:
-    return await process_image(redis_store, tvg_id, image_url, title, 256, 256, "icon", monochrome=True)
+    """
+    Get an icon image (square format, monochrome).
+    
+    Args:
+        redis_store: RedisStore instance for caching
+        tvg_id: Channel identifier
+        image_url: URL of the image
+        title: Title for placeholder if needed
+        
+    Returns:
+        BytesIO object containing the icon image (grayscale)
+    """
+    return await process_image(redis_store, tvg_id, image_url, title, ICON_WIDTH, ICON_HEIGHT, "icon", monochrome=True)
