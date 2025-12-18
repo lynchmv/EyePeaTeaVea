@@ -12,12 +12,15 @@ from src.main import app
 from src.redis_store import RedisStore
 from src.models import UserData
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def redis_store_fixture():
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     store = RedisStore(redis_url)
     # Ensure a clean state for tests
     store.redis_client.flushdb()
+    # Clear rate limits
+    for key in store.redis_client.scan_iter("rate_limit:*"):
+        store.redis_client.delete(key)
     return store
 
 def test_configure_and_get_manifest(redis_store_fixture: RedisStore):
@@ -144,7 +147,8 @@ def test_configure_invalid_data(redis_store_fixture: RedisStore):
             }
         )
         assert response.status_code == 422
-        assert "maximum" in response.json()["detail"][0]["msg"].lower()
+        error_msg = response.json()["detail"][0]["msg"].lower()
+        assert "at most" in error_msg or "maximum" in error_msg
         
         # Test with unsupported URL scheme (ftp)
         response = client.post(
@@ -360,3 +364,181 @@ def test_catalog_events(redis_store_fixture: RedisStore):
         assert response.status_code == 200
         catalog = response.json()
         assert len(catalog["metas"]) == 0
+
+def test_health_endpoint(redis_store_fixture: RedisStore):
+    """Test the health check endpoint."""
+    with TestClient(app) as client:
+        response = client.get("/health")
+        assert response.status_code == 200
+        health_data = response.json()
+        assert "status" in health_data
+        assert "redis" in health_data
+        assert "service" in health_data
+        assert health_data["service"] == "EyePeaTeaVea"
+        # Redis should be connected in test environment
+        assert health_data["redis"] == "connected"
+        assert health_data["status"] == "healthy"
+
+def test_rate_limiting(redis_store_fixture: RedisStore):
+    """Test rate limiting on /configure endpoint."""
+    with TestClient(app) as client:
+        # Make 10 requests (the limit)
+        for i in range(10):
+            response = client.post(
+                "/configure",
+                json={
+                    "m3u_sources": [f"http://example.com/playlist{i}.m3u"],
+                    "host_url": "http://test-host.com"
+                }
+            )
+            # All should succeed
+            assert response.status_code in [200, 422]  # 422 for validation errors is OK
+        
+        # 11th request should be rate limited
+        response = client.post(
+            "/configure",
+            json={
+                "m3u_sources": ["http://example.com/playlist11.m3u"],
+                "host_url": "http://test-host.com"
+            }
+        )
+        assert response.status_code == 429
+        assert "rate limit" in response.json()["detail"].lower()
+
+def test_get_config_endpoint(redis_store_fixture: RedisStore):
+    """Test the GET /{secret_str}/config endpoint."""
+    with TestClient(app) as client:
+        # First, create a configuration
+        response = client.post(
+            "/configure",
+            json={
+                "m3u_sources": ["http://example.com/playlist.m3u"],
+                "parser_schedule_crontab": "0 */6 * * *",
+                "host_url": "http://test-host.com",
+                "addon_password": "testpass"
+            }
+        )
+        assert response.status_code == 200
+        secret_str = response.json()["secret_str"]
+        
+        # Get the configuration
+        response = client.get(f"/{secret_str}/config")
+        assert response.status_code == 200
+        config = response.json()
+        assert config["m3u_sources"] == ["http://example.com/playlist.m3u"]
+        assert config["parser_schedule_crontab"] == "0 */6 * * *"
+        assert config["host_url"] == "http://test-host.com/"
+        assert config["addon_password"] == "testpass"
+        
+        # Test with invalid secret_str
+        response = client.get("/invalid_secret/config")
+        assert response.status_code == 404
+
+def test_empty_catalog(redis_store_fixture: RedisStore):
+    """Test catalog endpoints with no channels."""
+    with TestClient(app) as client:
+        # Configure a user but don't add any channels
+        response = client.post(
+            "/configure",
+            json={
+                "m3u_sources": ["http://example.com/playlist.m3u"],
+                "host_url": "http://test-host.com"
+            }
+        )
+        secret_str = response.json()["secret_str"]
+        
+        # Test TV catalog with no channels
+        response = client.get(f"/{secret_str}/catalog/tv/iptv_tv.json")
+        assert response.status_code == 200
+        catalog = response.json()
+        assert catalog["metas"] == []
+        
+        # Test events catalog with no channels
+        response = client.get(f"/{secret_str}/catalog/events/iptv_sports_events.json")
+        assert response.status_code == 200
+        catalog = response.json()
+        assert catalog["metas"] == []
+
+def test_stream_endpoint_no_channel(redis_store_fixture: RedisStore):
+    """Test stream endpoint when channel doesn't exist."""
+    with TestClient(app) as client:
+        # Configure a user
+        response = client.post(
+            "/configure",
+            json={
+                "m3u_sources": ["http://example.com/playlist.m3u"],
+                "host_url": "http://test-host.com"
+            }
+        )
+        secret_str = response.json()["secret_str"]
+        
+        # Try to get stream for non-existent channel
+        response = client.get(f"/{secret_str}/stream/tv/eyepeateaveaNonexistent.json")
+        # Stream endpoint returns 404 when channel not found
+        assert response.status_code == 404
+
+def test_meta_endpoint_no_channel(redis_store_fixture: RedisStore):
+    """Test meta endpoint when channel doesn't exist."""
+    with TestClient(app) as client:
+        # Configure a user
+        response = client.post(
+            "/configure",
+            json={
+                "m3u_sources": ["http://example.com/playlist.m3u"],
+                "host_url": "http://test-host.com"
+            }
+        )
+        secret_str = response.json()["secret_str"]
+        
+        # Try to get meta for non-existent channel
+        response = client.get(f"/{secret_str}/meta/tv/eyepeateaveaNonexistent.json")
+        # Meta endpoint returns 404 when channel not found
+        assert response.status_code == 404
+
+def test_catalog_filtering_edge_cases(redis_store_fixture: RedisStore):
+    """Test catalog filtering with edge cases."""
+    with TestClient(app) as client:
+        # Configure a user
+        response = client.post(
+            "/configure",
+            json={
+                "m3u_sources": ["http://example.com/playlist.m3u"],
+                "host_url": "http://test-host.com"
+            }
+        )
+        secret_str = response.json()["secret_str"]
+        
+        # Store channels with various edge cases
+        channels = [
+            {
+                "group_title": "News",
+                "tvg_id": "CNN",
+                "tvg_name": "CNN",
+                "tvg_logo": "",
+                "url_tvg": "",
+                "stream_url": "http://cnn.com/live",
+                "is_event": False
+            },
+            {
+                "group_title": "",  # Empty group title
+                "tvg_id": "NOGROUP",
+                "tvg_name": "No Group",
+                "tvg_logo": "",
+                "url_tvg": "",
+                "stream_url": "http://nogroup.com/live",
+                "is_event": False
+            }
+        ]
+        redis_store_fixture.store_channels(secret_str, channels)
+        
+        # Test filtering with empty genre
+        response = client.get(f"/{secret_str}/catalog/tv/iptv_tv/genre=.json")
+        assert response.status_code == 200
+        
+        # Test filtering with special characters in search (URL encoded)
+        import urllib.parse
+        search_term = urllib.parse.quote("@#$%")
+        response = client.get(f"/{secret_str}/catalog/tv/iptv_tv/search={search_term}.json")
+        assert response.status_code == 200
+        catalog = response.json()
+        assert "metas" in catalog

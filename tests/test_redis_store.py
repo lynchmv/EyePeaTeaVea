@@ -159,5 +159,85 @@ class TestRedisStore(unittest.TestCase):
         self.assertIn(secret_str_1, all_secret_strs)
         self.assertIn(secret_str_2, all_secret_strs)
 
+    def test_event_expiration(self):
+        """Test that events are stored with expiration based on event_datetime_full."""
+        import pytz
+        from datetime import datetime, timedelta
+        
+        secret_str = generate_secret_str()
+        
+        # Create an event with a future datetime
+        future_dt = datetime.now(pytz.utc) + timedelta(hours=2)
+        event_data = {
+            "group_title": "Sports",
+            "tvg_id": "FutureEvent",
+            "tvg_name": "Future Game",
+            "tvg_logo": "sports.png",
+            "url_tvg": "",
+            "stream_url": "http://sports.com/live",
+            "is_event": True,
+            "event_datetime_full": future_dt.strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        self.redis_store.store_channels(secret_str, [event_data])
+        
+        # Verify event was stored
+        retrieved_channel_json = self.redis_store.get_channel(secret_str, "FutureEvent")
+        self.assertIsNotNone(retrieved_channel_json)
+        
+        # Verify TTL is set (should be approximately 4 hours after event time)
+        key = f"channel:{secret_str}:FutureEvent"
+        ttl = self.redis_store.redis_client.ttl(key)
+        # TTL should be positive and approximately 6 hours (2 hours until event + 4 hours expiration)
+        self.assertGreater(ttl, 0)
+        self.assertLess(ttl, 6 * 3600 + 100)  # Allow some margin
+
+    def test_event_expiration_past_event(self):
+        """Test that past events are not stored."""
+        import pytz
+        from datetime import datetime, timedelta
+        
+        secret_str = generate_secret_str()
+        
+        # Create an event with a past datetime (more than 4 hours ago)
+        past_dt = datetime.now(pytz.utc) - timedelta(hours=5)
+        event_data = {
+            "group_title": "Sports",
+            "tvg_id": "PastEvent",
+            "tvg_name": "Past Game",
+            "tvg_logo": "sports.png",
+            "url_tvg": "",
+            "stream_url": "http://sports.com/live",
+            "is_event": True,
+            "event_datetime_full": past_dt.strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        self.redis_store.store_channels(secret_str, [event_data])
+        
+        # Verify event was NOT stored (expired before storage)
+        retrieved_channel_json = self.redis_store.get_channel(secret_str, "PastEvent")
+        self.assertIsNone(retrieved_channel_json)
+
+    def test_event_invalid_datetime(self):
+        """Test that events with invalid datetime are not stored."""
+        secret_str = generate_secret_str()
+        
+        event_data = {
+            "group_title": "Sports",
+            "tvg_id": "InvalidEvent",
+            "tvg_name": "Invalid Game",
+            "tvg_logo": "sports.png",
+            "url_tvg": "",
+            "stream_url": "http://sports.com/live",
+            "is_event": True,
+            "event_datetime_full": "invalid-date-format"
+        }
+        
+        self.redis_store.store_channels(secret_str, [event_data])
+        
+        # Verify event was NOT stored (invalid datetime)
+        retrieved_channel_json = self.redis_store.get_channel(secret_str, "InvalidEvent")
+        self.assertIsNone(retrieved_channel_json)
+
 if __name__ == '__main__':
     unittest.main()
