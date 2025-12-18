@@ -45,3 +45,4 @@ logs/
 example.m3u
 example.xml
 .gemini
+temp_trigger_refresh.py
