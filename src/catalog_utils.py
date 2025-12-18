@@ -12,32 +12,55 @@ def filter_channels(
 ) -> List[Dict]:
     """
     Filters channels based on type and extra parameters.
+    Optimized to minimize JSON parsing and improve performance.
     """
     filtered_channels = []
     is_search = extra_name == "search" and extra_value
+    search_term_lower = extra_value.lower() if extra_value else None
+    
+    # Pre-compile filter conditions to avoid repeated checks
+    filter_by_genre = extra_name == "genre" and extra_value
+    filter_by_search = is_search and search_term_lower
 
     for _, channel_json in channels_data.items():
-        channel = json.loads(channel_json)
+        # Parse JSON once per channel
+        try:
+            channel = json.loads(channel_json)
+        except json.JSONDecodeError:
+            # Skip invalid JSON
+            continue
 
+        # Early filtering based on channel type
+        is_event = channel.get("is_event", False)
+        
         if channel_type == "tv":
-            if channel.get("is_event"):
+            if is_event:
                 continue
-            if extra_name == "genre" and extra_value and channel.get("group_title") != extra_value:
+            # Apply genre filter if specified
+            if filter_by_genre and channel.get("group_title") != extra_value:
                 continue
-            if is_search and extra_value.lower() not in channel.get("tvg_name", "").lower():
-                continue
+            # Apply search filter if specified
+            if filter_by_search:
+                tvg_name = channel.get("tvg_name", "")
+                if search_term_lower not in tvg_name.lower():
+                    continue
         elif channel_type == "events":
-            if not channel.get("is_event"):
+            if not is_event:
                 continue
-            if extra_name == "genre" and extra_value and channel.get("event_sport") != extra_value:
+            # Apply genre filter if specified
+            if filter_by_genre and channel.get("event_sport") != extra_value:
                 continue
-            if is_search and extra_value.lower() not in channel.get("event_title", "").lower():
-                continue
+            # Apply search filter if specified
+            if filter_by_search:
+                event_title = channel.get("event_title", "")
+                if search_term_lower not in event_title.lower():
+                    continue
         else:
             continue
 
         filtered_channels.append(channel)
 
+    # Sort filtered results
     sort_key = "event_title" if channel_type == "events" else "tvg_name"
     filtered_channels.sort(key=lambda x: x.get(sort_key, "").lower())
 

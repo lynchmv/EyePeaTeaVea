@@ -10,6 +10,10 @@ logger = logging.getLogger(__name__)
 # Define the generic placeholder URL
 GENERIC_PLACEHOLDER_URL = "https://via.placeholder.com/240x135.png?text=No+Logo"
 
+# Cache constants
+IMAGE_CACHE_EXPIRATION_SECONDS = 60 * 60 * 24 * 7  # 7 days
+IMAGE_FETCH_TIMEOUT_SECONDS = 10
+
 # Function to generate a default placeholder image
 def generate_placeholder_image(title: str = "No Logo", width: int = 500, height: int = 750, monochrome: bool = False) -> BytesIO:
     if monochrome:
@@ -68,13 +72,13 @@ async def fetch_image_content(redis_store: RedisStore, url: str) -> bytes:
     try:
         async with httpx.AsyncClient() as client:
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"}
-            response = await client.get(url, headers=headers, timeout=10, follow_redirects=True)
+            response = await client.get(url, headers=headers, timeout=IMAGE_FETCH_TIMEOUT_SECONDS, follow_redirects=True)
             response.raise_for_status()
             if not response.headers["Content-Type"].lower().startswith("image/"):
                 raise ValueError(f"Unexpected content type: {response.headers['Content-Type']}")
             
             content = response.content
-            redis_store.set(cache_key, content, expiration_time=60*60*24*7) # Cache for 7 days
+            redis_store.set(cache_key, content, expiration_time=IMAGE_CACHE_EXPIRATION_SECONDS)
             return content
     except httpx.HTTPStatusError as e:
         logger.warning(f"HTTP status error fetching image from {url}: {e}")

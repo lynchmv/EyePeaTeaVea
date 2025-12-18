@@ -9,6 +9,11 @@ from .models import UserData
 
 logger = logging.getLogger(__name__)
 
+# Performance constants
+REDIS_BATCH_SIZE = 1000  # Batch size for bulk operations
+IMAGE_CACHE_EXPIRATION_SECONDS = 60 * 60 * 24 * 7  # 7 days
+EVENT_EXPIRATION_HOURS = 4  # Hours after event time before expiration
+
 class RedisConnectionError(Exception):
     """Raised when Redis operations fail due to connection issues."""
     pass
@@ -33,7 +38,15 @@ class RedisStore:
         """Attempt to connect to Redis with retry logic."""
         for attempt in range(1, self.max_retries + 1):
             try:
-                self.redis_client = redis.from_url(self.redis_url, socket_connect_timeout=5, socket_timeout=5)
+                # Enable connection pooling for better performance
+                self.redis_client = redis.from_url(
+                    self.redis_url,
+                    socket_connect_timeout=5,
+                    socket_timeout=5,
+                    socket_keepalive=True,
+                    socket_keepalive_options={},
+                    health_check_interval=30
+                )
                 self.redis_client.ping()
                 logger.info(f"Successfully connected to Redis at {self.redis_url}")
                 return
@@ -73,12 +86,20 @@ class RedisStore:
             return False
 
     def clear_all_user_data(self):
+        """Clear all user data. Uses scan_iter for better performance."""
         try:
             self._ensure_connection()
-            keys = self.redis_client.keys("user_data:*")
-            if keys:
-                self.redis_client.delete(*keys)
-                logger.info(f"Cleared {len(keys)} user data entries from Redis.")
+            keys_to_delete = []
+            # Use scan_iter instead of keys() for better performance
+            for key in self.redis_client.scan_iter(match="user_data:*"):
+                keys_to_delete.append(key)
+            
+            if keys_to_delete:
+                # Delete in batches to avoid blocking Redis
+                for i in range(0, len(keys_to_delete), REDIS_BATCH_SIZE):
+                    batch = keys_to_delete[i:i + REDIS_BATCH_SIZE]
+                    self.redis_client.delete(*batch)
+                logger.info(f"Cleared {len(keys_to_delete)} user data entries from Redis.")
         except RedisConnectionError as e:
             logger.error(f"Cannot clear user data: {e}")
             raise
@@ -144,10 +165,10 @@ class RedisStore:
                 tvg_id = channel["tvg_id"]
                 if channel.get("is_event") and channel.get("event_datetime_full"):
                     try:
-                        event_dt = datetime.strptime(channel["event_datetime_full"], "%Y-%m-%d %H:%M:%S")
-                        event_dt = pytz.utc.localize(event_dt)
-                        # Add 4 hours to the event time for expiration
-                        expiration_dt = event_dt + timedelta(hours=4)
+                    event_dt = datetime.strptime(channel["event_datetime_full"], "%Y-%m-%d %H:%M:%S")
+                    event_dt = pytz.utc.localize(event_dt)
+                    # Add expiration hours to the event time for expiration
+                    expiration_dt = event_dt + timedelta(hours=EVENT_EXPIRATION_HOURS)
                         now = datetime.now(pytz.utc)
                         if expiration_dt > now:
                             expiration_time_seconds = int((expiration_dt - now).total_seconds())
@@ -181,38 +202,68 @@ class RedisStore:
             return None
 
     def get_all_channels(self, secret_str: str) -> dict:
-        """Retrieves all stored channels and events for a specific user."""
+        """
+        Retrieves all stored channels and events for a specific user.
+        Uses scan_iter for better performance with large datasets.
+        """
         try:
             self._ensure_connection()
             pattern = f"channel:{secret_str}:*"
-            all_keys = self.redis_client.keys(pattern)
             all_channels_data = {}
-            for key in all_keys:
-                # Extract tvg_id from key: "channel:{secret_str}:{tvg_id}"
-                key_str = key.decode('utf-8')
-                tvg_id = key_str.replace(f"channel:{secret_str}:", "")
-                channel_json = self.redis_client.get(key)
-                if channel_json:
-                    all_channels_data[tvg_id] = channel_json.decode('utf-8')
+            
+            # Use scan_iter instead of keys() for better performance
+            # scan_iter is non-blocking and works better with large datasets
+            pipeline = self.redis_client.pipeline()
+            keys_to_fetch = []
+            
+            # Collect all matching keys
+            for key in self.redis_client.scan_iter(match=pattern):
+                keys_to_fetch.append(key)
+            
+            # Batch fetch all channel data using pipeline
+            if keys_to_fetch:
+                for key in keys_to_fetch:
+                    pipeline.get(key)
+                
+                results = pipeline.execute()
+                
+                # Process results
+                for key, channel_json in zip(keys_to_fetch, results):
+                    if channel_json:
+                        # Extract tvg_id from key: "channel:{secret_str}:{tvg_id}"
+                        key_str = key.decode('utf-8')
+                        tvg_id = key_str.replace(f"channel:{secret_str}:", "")
+                        all_channels_data[tvg_id] = channel_json.decode('utf-8')
+            
             return all_channels_data
         except RedisConnectionError as e:
             logger.error(f"Cannot get all channels for {secret_str[:8]}...: {e}")
             return {}
 
     def clear_all_data(self):
-        """Clears all M3U data from Redis."""
+        """Clears all M3U data from Redis. Uses batch deletion for better performance."""
         try:
             self._ensure_connection()
             # Delete all channel:* keys (both old format and new user-specific format)
-            for key in self.redis_client.scan_iter("channel:*"):
-                self.redis_client.delete(key)
+            channel_keys = list(self.redis_client.scan_iter(match="channel:*"))
+            for i in range(0, len(channel_keys), REDIS_BATCH_SIZE):
+                batch = channel_keys[i:i + REDIS_BATCH_SIZE]
+                self.redis_client.delete(*batch)
+            
             # Delete all processed_image keys (both old format and new user-specific format)
-            for key in self.redis_client.scan_iter("processed_image:*"):
-                self.redis_client.delete(key)
+            image_keys = list(self.redis_client.scan_iter(match="processed_image:*"))
+            for i in range(0, len(image_keys), REDIS_BATCH_SIZE):
+                batch = image_keys[i:i + REDIS_BATCH_SIZE]
+                self.redis_client.delete(*batch)
+            
             # Find all user_data keys and delete them
-            for key in self.redis_client.scan_iter("user_data:*"):
-                self.redis_client.delete(key)
-            logger.info("Cleared all M3U data from Redis.")
+            user_data_keys = list(self.redis_client.scan_iter(match="user_data:*"))
+            for i in range(0, len(user_data_keys), REDIS_BATCH_SIZE):
+                batch = user_data_keys[i:i + REDIS_BATCH_SIZE]
+                self.redis_client.delete(*batch)
+            
+            total_deleted = len(channel_keys) + len(image_keys) + len(user_data_keys)
+            logger.info(f"Cleared all M3U data from Redis ({total_deleted} keys deleted).")
         except RedisConnectionError as e:
             logger.error(f"Cannot clear all data: {e}")
             raise
@@ -232,11 +283,18 @@ class RedisStore:
             raise
 
     def get_all_secret_strs(self) -> list[str]:
-        """Retrieves all stored secret_str keys."""
+        """
+        Retrieves all stored secret_str keys.
+        Uses scan_iter for better performance with large datasets.
+        """
         try:
             self._ensure_connection()
-            keys = self.redis_client.keys("user_data:*")
-            return [key.decode('utf-8').replace("user_data:", "") for key in keys]
+            secret_strs = []
+            # Use scan_iter instead of keys() for better performance
+            for key in self.redis_client.scan_iter(match="user_data:*"):
+                secret_str = key.decode('utf-8').replace("user_data:", "")
+                secret_strs.append(secret_str)
+            return secret_strs
         except RedisConnectionError as e:
             logger.error(f"Cannot get all secret_strs: {e}")
             return []
@@ -245,9 +303,9 @@ class RedisStore:
         """Stores processed image bytes in Redis. Images are cached globally since the same channel logo produces the same processed image."""
         try:
             self._ensure_connection()
-            # Store with an expiration time (e.g., 7 days) to prevent Redis from filling up
+            # Store with an expiration time to prevent Redis from filling up
             key = f"processed_image:{cache_key}"
-            self.redis_client.setex(key, 60 * 60 * 24 * 7, image_bytes)
+            self.redis_client.setex(key, IMAGE_CACHE_EXPIRATION_SECONDS, image_bytes)
         except RedisConnectionError as e:
             logger.error(f"Cannot store processed image {cache_key}: {e}")
             # Don't raise for image caching - it's not critical
