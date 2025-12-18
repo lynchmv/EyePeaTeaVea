@@ -178,6 +178,34 @@ class RedisStore:
             logger.error(f"Cannot set key {key}: {e}")
             raise
 
+    def incr(self, key: str, expiration_time: int | None = None) -> int:
+        """
+        Atomically increment a key's value in Redis.
+        
+        Args:
+            key: Redis key to increment
+            expiration_time: Optional expiration time in seconds (only set on first increment)
+            
+        Returns:
+            The new value after incrementing
+            
+        Raises:
+            RedisConnectionError: If Redis is unavailable
+        """
+        try:
+            self._ensure_connection()
+            # Use pipeline to atomically increment and set expiration if needed
+            pipe = self.redis_client.pipeline()
+            pipe.incr(key)
+            if expiration_time is not None:
+                # Only set expiration if key doesn't exist (first increment)
+                pipe.expire(key, expiration_time)
+            results = pipe.execute()
+            return results[0]  # Return the incremented value
+        except RedisConnectionError as e:
+            logger.error(f"Cannot increment key {key}: {e}")
+            raise
+
     def store_user_data(self, secret_str: str, user_data: UserData) -> None:
         """Stores user-specific configuration data in Redis."""
         try:

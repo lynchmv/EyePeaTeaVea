@@ -17,6 +17,7 @@ Features:
 import os
 import json
 import logging
+import hashlib
 from fastapi import FastAPI, HTTPException, Response, Depends, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,7 +28,7 @@ from urllib.parse import urljoin
 
 from .redis_store import RedisStore, RedisConnectionError
 from .models import UserData, ConfigureRequest, UpdateConfigureRequest
-from .utils import generate_secret_str, hash_secret_str
+from .utils import generate_secret_str, hash_secret_str, validate_secret_str
 from .scheduler import Scheduler
 from .image_processor import get_poster, get_background, get_logo, get_icon
 from .catalog_utils import filter_channels, create_meta
@@ -127,7 +128,10 @@ async def check_rate_limit(
     window_seconds: int = 3600
 ) -> None:
     """
-    Rate limiting dependency using Redis sliding window.
+    Rate limiting dependency using Redis atomic INCR operation.
+    
+    Uses Redis INCR for atomic counter increments, ensuring thread-safe
+    rate limiting even under high concurrency.
     
     Args:
         request: FastAPI request object
@@ -141,31 +145,16 @@ async def check_rate_limit(
         client_id = get_client_identifier(request)
         rate_limit_key = f"{client_id}"
         
-        # Get current count from Redis
-        current_count_bytes = redis_store.get(rate_limit_key)
+        # Atomically increment counter using Redis INCR
+        # This ensures thread-safe counting even under high concurrency
+        count = redis_store.incr(rate_limit_key, expiration_time=window_seconds)
         
-        if current_count_bytes is None:
-            # First request in window - initialize counter
-            redis_store.set(rate_limit_key, b"1", expiration_time=window_seconds)
-            return
-        
-        # Decode and check count
-        try:
-            count = int(current_count_bytes.decode('utf-8'))
-        except (ValueError, AttributeError):
-            # Invalid data, reset counter
-            redis_store.set(rate_limit_key, b"1", expiration_time=window_seconds)
-            return
-        
-        if count >= limit:
+        if count > limit:
             logger.warning(f"Rate limit exceeded for {client_id}: {count}/{limit} requests in {window_seconds}s")
             raise HTTPException(
                 status_code=429,
                 detail=f"Rate limit exceeded. Maximum {limit} requests per {window_seconds // 60} minutes. Please try again later."
             )
-        
-        # Increment counter (Redis will maintain expiration from first set)
-        redis_store.set(rate_limit_key, str(count + 1).encode(), expiration_time=window_seconds)
         
     except HTTPException:
         raise
@@ -179,6 +168,27 @@ async def check_rate_limit(
         return
 
 async def get_user_data_dependency(secret_str: str) -> UserData:
+    """
+    Dependency function to validate secret_str and retrieve user data.
+    
+    Validates the secret_str format and retrieves user configuration from Redis.
+    Raises appropriate HTTP exceptions for invalid or missing configurations.
+    
+    Args:
+        secret_str: User's secret string (validated)
+        
+    Returns:
+        UserData instance for the user
+        
+    Raises:
+        HTTPException: 400 if secret_str is invalid, 404 if not found, 503 if Redis unavailable
+    """
+    try:
+        # Validate secret_str format
+        validate_secret_str(secret_str)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid secret_str: {e}")
+    
     try:
         user_data = redis_store.get_user_data(secret_str)
         if not user_data:
@@ -187,6 +197,61 @@ async def get_user_data_dependency(secret_str: str) -> UserData:
     except RedisConnectionError as e:
         logger.error(f"Redis connection error while fetching user data: {e}")
         raise HTTPException(status_code=503, detail="Service temporarily unavailable: Redis connection failed")
+
+def get_channel_data(secret_str: str, tvg_id: str) -> dict:
+    """
+    Retrieve and parse channel data from Redis.
+    
+    Args:
+        secret_str: User's secret string
+        tvg_id: Channel identifier
+        
+    Returns:
+        Parsed channel dictionary
+        
+    Raises:
+        HTTPException: If channel not found or JSON parsing fails
+    """
+    channel_json = redis_store.get_channel(secret_str, tvg_id)
+    if not channel_json:
+        raise HTTPException(status_code=404, detail=f"Channel with tvg_id: {tvg_id} not found.")
+    
+    try:
+        return json.loads(channel_json)
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse channel JSON for tvg_id {tvg_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Invalid channel data for tvg_id: {tvg_id}")
+
+async def get_image_response(
+    secret_str: str,
+    tvg_id: str,
+    image_processor_func,
+    media_type: str = "image/jpeg"
+) -> Response:
+    """
+    Common helper function for image endpoints.
+    
+    Args:
+        secret_str: User's secret string
+        tvg_id: Channel identifier
+        image_processor_func: Async function to process the image (get_poster, get_background, etc.)
+        media_type: MIME type for the response
+        
+    Returns:
+        FastAPI Response with image content
+        
+    Raises:
+        HTTPException: If channel not found or image processing fails
+    """
+    channel = get_channel_data(secret_str, tvg_id)
+    image_url = channel["tvg_logo"]
+    title = channel["tvg_name"]
+    
+    processed_image_bytes = await image_processor_func(redis_store, tvg_id, image_url, title)
+    if not processed_image_bytes.getvalue():
+        raise HTTPException(status_code=500, detail=f"Image processing failed for tvg_id: {tvg_id}")
+    
+    return Response(content=processed_image_bytes.getvalue(), media_type=media_type)
 
 @app.get("/")
 async def root():
@@ -327,7 +392,8 @@ async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_d
             if channel.get("is_event") and channel.get("event_sport"):
                 unique_event_genres.add(channel["event_sport"])
         except json.JSONDecodeError as e:
-            logger.error(f"Error decoding channel JSON from Redis: {e} - {channel_json}")
+            logger.error(f"Error decoding channel JSON from Redis: {e} - {channel_json[:100]}...")
+            continue  # Skip invalid channels
 
     manifest = {
         "id": ADDON_ID,
@@ -369,55 +435,33 @@ app.mount("/frontend", StaticFiles(directory="frontend", html=True), name="front
 
 @app.get("/{secret_str}/poster/{tvg_id}.png")
 async def get_poster_image(secret_str: str, tvg_id: str, user_data: UserData = Depends(get_user_data_dependency)):
-    channel_json = redis_store.get_channel(secret_str, tvg_id)
-    if not channel_json:
-        raise HTTPException(status_code=404, detail=f"Channel with tvg_id: {tvg_id} not found.")
-    channel = json.loads(channel_json)
-    image_url = channel["tvg_logo"]
-    processed_image_bytes = await get_poster(redis_store, tvg_id, image_url, channel["tvg_name"])
-    if not processed_image_bytes.getvalue():
-        raise HTTPException(status_code=500, detail=f"Image processing failed for tvg_id: {tvg_id}")
-    return Response(content=processed_image_bytes.getvalue(), media_type="image/jpeg")
+    """Get a poster image for a channel."""
+    return await get_image_response(secret_str, tvg_id, get_poster)
 
 @app.get("/{secret_str}/background/{tvg_id}.png")
 async def get_background_image(secret_str: str, tvg_id: str, user_data: UserData = Depends(get_user_data_dependency)):
-    channel_json = redis_store.get_channel(secret_str, tvg_id)
-    if not channel_json:
-        raise HTTPException(status_code=404, detail=f"Channel with tvg_id: {tvg_id} not found.")
-    channel = json.loads(channel_json)
-    image_url = channel["tvg_logo"]
-    processed_image_bytes = await get_background(redis_store, tvg_id, image_url, channel["tvg_name"])
-    if not processed_image_bytes.getvalue():
-        raise HTTPException(status_code=500, detail=f"Image processing failed for tvg_id: {tvg_id}")
-    return Response(content=processed_image_bytes.getvalue(), media_type="image/jpeg")
+    """Get a background image for a channel."""
+    return await get_image_response(secret_str, tvg_id, get_background)
 
 @app.get("/{secret_str}/logo/{tvg_id}.png")
 async def get_logo_image(secret_str: str, tvg_id: str, user_data: UserData = Depends(get_user_data_dependency)):
-    channel_json = redis_store.get_channel(secret_str, tvg_id)
-    if not channel_json:
-        raise HTTPException(status_code=404, detail=f"Channel with tvg_id: {tvg_id} not found.")
-    channel = json.loads(channel_json)
-    image_url = channel["tvg_logo"]
-    processed_image_bytes = await get_logo(redis_store, tvg_id, image_url, channel["tvg_name"])
-    if not processed_image_bytes.getvalue():
-        raise HTTPException(status_code=500, detail=f"Image processing failed for tvg_id: {tvg_id}")
-    return Response(content=processed_image_bytes.getvalue(), media_type="image/jpeg")
+    """Get a logo image for a channel."""
+    return await get_image_response(secret_str, tvg_id, get_logo)
 
 @app.get("/{secret_str}/icon/{tvg_id}.png")
 async def get_icon_image(secret_str: str, tvg_id: str, user_data: UserData = Depends(get_user_data_dependency)):
+    """Get an icon image for a channel or the addon logo."""
     # For the manifest icon, we use a static logo. For channel icons, we use the channel's logo.
     if tvg_id == "logo":
         image_url = f"{HOST_URL}/icon/logo.png"
         channel_name = ADDON_NAME
+        processed_image_bytes = await get_icon(redis_store, tvg_id, image_url, channel_name)
     else:
-        channel_json = redis_store.get_channel(secret_str, tvg_id)
-        if not channel_json:
-            raise HTTPException(status_code=404, detail=f"Channel with tvg_id: {tvg_id} not found.")
-        channel = json.loads(channel_json)
+        channel = get_channel_data(secret_str, tvg_id)
         image_url = channel["tvg_logo"]
         channel_name = channel["tvg_name"]
-
-    processed_image_bytes = await get_icon(redis_store, tvg_id, image_url, channel_name)
+        processed_image_bytes = await get_icon(redis_store, tvg_id, image_url, channel_name)
+    
     if not processed_image_bytes.getvalue():
         raise HTTPException(status_code=500, detail=f"Image processing failed for tvg_id: {tvg_id}")
     return Response(content=processed_image_bytes.getvalue(), media_type="image/png")
@@ -461,23 +505,30 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
 
         channel_json = redis_store.get_channel(secret_str, tvg_id)
         if channel_json:
-            channel = json.loads(channel_json)
-            if channel.get("is_event"):
-                import hashlib
-                current_event_hash_suffix = hashlib.sha256(channel["event_title"].encode()).hexdigest()[:EVENT_HASH_SUFFIX_LENGTH]
-                if current_event_hash_suffix == event_hash_suffix:
-                    meta = create_meta(channel, secret_str, ADDON_ID_PREFIX, HOST_URL)
-                    meta.update({"runtime": "", "releaseInfo": "", "links": []})
-                    return {"meta": meta}
+            try:
+                channel = json.loads(channel_json)
+                if channel.get("is_event"):
+                    current_event_hash_suffix = hashlib.sha256(channel["event_title"].encode()).hexdigest()[:EVENT_HASH_SUFFIX_LENGTH]
+                    if current_event_hash_suffix == event_hash_suffix:
+                        meta = create_meta(channel, secret_str, ADDON_ID_PREFIX, HOST_URL)
+                        meta.update({"runtime": "", "releaseInfo": "", "links": []})
+                        return {"meta": meta}
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse channel JSON for tvg_id {tvg_id} in get_meta: {e}")
+                raise HTTPException(status_code=500, detail=f"Invalid channel data for tvg_id: {tvg_id}")
     elif type == "tv" and id.startswith(ADDON_ID_PREFIX):
         tvg_id = id.replace(ADDON_ID_PREFIX, "")
         channel_json = redis_store.get_channel(secret_str, tvg_id)
         if channel_json:
-            channel = json.loads(channel_json)
-            if not channel.get("is_event"):
-                meta = create_meta(channel, secret_str, ADDON_ID_PREFIX, HOST_URL)
-                meta.update({"runtime": "", "releaseInfo": "", "links": []})
-                return {"meta": meta}
+            try:
+                channel = json.loads(channel_json)
+                if not channel.get("is_event"):
+                    meta = create_meta(channel, secret_str, ADDON_ID_PREFIX, HOST_URL)
+                    meta.update({"runtime": "", "releaseInfo": "", "links": []})
+                    return {"meta": meta}
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse channel JSON for tvg_id {tvg_id} in get_meta: {e}")
+                raise HTTPException(status_code=500, detail=f"Invalid channel data for tvg_id: {tvg_id}")
     raise HTTPException(status_code=404, detail=f"Meta with type: {type} and id: {id} not found.")
 
 @app.get("/{secret_str}/stream/{type}/{id}.json")
@@ -492,12 +543,16 @@ async def get_stream(secret_str: str, type: str, id: str, user_data: UserData = 
             tvg_id = id.replace(ADDON_ID_PREFIX, "")
         channel_json = redis_store.get_channel(secret_str, tvg_id)
         if channel_json:
-            channel = json.loads(channel_json)
-            name = channel["event_title"] if channel.get("is_event") else channel["tvg_name"]
-            stream = {
-                "name": name,
-                "description": f"Live stream for {name}",
-                "url": channel["stream_url"]
-            }
-            return {"streams": [stream]}
+            try:
+                channel = json.loads(channel_json)
+                name = channel["event_title"] if channel.get("is_event") else channel["tvg_name"]
+                stream = {
+                    "name": name,
+                    "description": f"Live stream for {name}",
+                    "url": channel["stream_url"]
+                }
+                return {"streams": [stream]}
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse channel JSON for tvg_id {tvg_id} in get_stream: {e}")
+                raise HTTPException(status_code=500, detail=f"Invalid channel data for tvg_id: {tvg_id}")
     raise HTTPException(status_code=404, detail=f"Stream with type: {type} and id: {id} not found.")
