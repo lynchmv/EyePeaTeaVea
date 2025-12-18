@@ -6,7 +6,7 @@ from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
 
 from .m3u_parser import M3UParser
-from .redis_store import RedisStore
+from .redis_store import RedisStore, RedisConnectionError
 from .models import UserData
 from .utils import validate_cron_expression
 
@@ -41,8 +41,12 @@ class Scheduler:
                 # Continue with other sources even if one fails
         
         if all_channels_list:
-            self.redis_store.store_channels(secret_str, all_channels_list)
-            logger.info(f"Stored {len(all_channels_list)} channels for secret_str: {secret_str}")
+            try:
+                self.redis_store.store_channels(secret_str, all_channels_list)
+                logger.info(f"Stored {len(all_channels_list)} channels for secret_str: {secret_str}")
+            except RedisConnectionError as e:
+                logger.error(f"Failed to store channels for {secret_str[:8]}...: {e}")
+                errors.append(f"Redis connection error: {e}")
         else:
             logger.warning(f"No channels were parsed for secret_str: {secret_str}")
         
