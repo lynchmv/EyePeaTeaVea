@@ -59,6 +59,40 @@ MAX_RETRIES = 3
 INITIAL_RETRY_DELAY = 1.0  # seconds
 RETRY_BACKOFF_MULTIPLIER = 2.0  # exponential backoff multiplier
 
+# Shared HTTP client for image fetching (reused across requests for better performance)
+_http_client: httpx.AsyncClient | None = None
+
+def get_http_client() -> httpx.AsyncClient:
+    """
+    Get or create the shared HTTP client instance.
+    
+    Creates a singleton HTTP client with connection pooling for better performance.
+    The client is reused across all image fetch requests.
+    
+    Returns:
+        Shared httpx.AsyncClient instance
+    """
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(
+            timeout=IMAGE_FETCH_TIMEOUT_SECONDS,
+            follow_redirects=True,
+            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"}
+        )
+    return _http_client
+
+async def close_http_client() -> None:
+    """
+    Close the shared HTTP client.
+    
+    Should be called during application shutdown to properly clean up connections.
+    """
+    global _http_client
+    if _http_client is not None:
+        await _http_client.aclose()
+        _http_client = None
+
 # GitHub tv-logos repository URL pattern
 GITHUB_TV_LOGOS_BASE = "https://github.com/tv-logo/tv-logos/blob/main/"
 
@@ -246,45 +280,46 @@ async def fetch_image_content(redis_store: RedisStore, url: str) -> bytes:
     retry_delay = INITIAL_RETRY_DELAY
     last_exception = None
     
+    # Get shared HTTP client for connection reuse
+    client = get_http_client()
+    
     for attempt in range(MAX_RETRIES):
         try:
-            async with httpx.AsyncClient() as client:
-                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"}
-                response = await client.get(url, headers=headers, timeout=IMAGE_FETCH_TIMEOUT_SECONDS, follow_redirects=True)
-                
-                # Handle rate limiting (429) with retry
-                if response.status_code == 429:
-                    if attempt < MAX_RETRIES - 1:
-                        # Check for Retry-After header
-                        retry_after = response.headers.get("Retry-After")
-                        if retry_after:
-                            try:
-                                wait_time = float(retry_after)
-                            except ValueError:
-                                wait_time = retry_delay
-                        else:
+            response = await client.get(url)
+            
+            # Handle rate limiting (429) with retry
+            if response.status_code == 429:
+                if attempt < MAX_RETRIES - 1:
+                    # Check for Retry-After header
+                    retry_after = response.headers.get("Retry-After")
+                    if retry_after:
+                        try:
+                            wait_time = float(retry_after)
+                        except ValueError:
                             wait_time = retry_delay
-                        
-                        logger.warning(
-                            f"Rate limited (429) fetching image from {url}. "
-                            f"Retrying in {wait_time:.1f}s (attempt {attempt + 1}/{MAX_RETRIES})"
-                        )
-                        await asyncio.sleep(wait_time)
-                        retry_delay *= RETRY_BACKOFF_MULTIPLIER
-                        continue
                     else:
-                        logger.error(f"Rate limit exceeded after {MAX_RETRIES} attempts for {url}")
-                        return b''
-                
-                response.raise_for_status()
-                
-                if not response.headers.get("Content-Type", "").lower().startswith("image/"):
-                    raise ValueError(f"Unexpected content type: {response.headers.get('Content-Type', 'unknown')}")
-                
-                content = response.content
-                # Cache the fetched content for future use
-                redis_store.set(cache_key, content, expiration_time=IMAGE_CACHE_EXPIRATION_SECONDS)
-                return content
+                        wait_time = retry_delay
+                    
+                    logger.warning(
+                        f"Rate limited (429) fetching image from {url}. "
+                        f"Retrying in {wait_time:.1f}s (attempt {attempt + 1}/{MAX_RETRIES})"
+                    )
+                    await asyncio.sleep(wait_time)
+                    retry_delay *= RETRY_BACKOFF_MULTIPLIER
+                    continue
+                else:
+                    logger.error(f"Rate limit exceeded after {MAX_RETRIES} attempts for {url}")
+                    return b''
+            
+            response.raise_for_status()
+            
+            if not response.headers.get("Content-Type", "").lower().startswith("image/"):
+                raise ValueError(f"Unexpected content type: {response.headers.get('Content-Type', 'unknown')}")
+            
+            content = response.content
+            # Cache the fetched content for future use
+            redis_store.set(cache_key, content, expiration_time=IMAGE_CACHE_EXPIRATION_SECONDS)
+            return content
                 
         except httpx.HTTPStatusError as e:
             # For non-429 errors, don't retry

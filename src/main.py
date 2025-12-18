@@ -28,9 +28,9 @@ from urllib.parse import urljoin
 
 from .redis_store import RedisStore, RedisConnectionError
 from .models import UserData, ConfigureRequest, UpdateConfigureRequest
-from .utils import generate_secret_str, hash_secret_str, validate_secret_str, hash_password
+from .utils import generate_secret_str, hash_secret_str, validate_secret_str, hash_password, validate_url
 from .scheduler import Scheduler
-from .image_processor import get_poster, get_background, get_logo, get_icon
+from .image_processor import get_poster, get_background, get_logo, get_icon, close_http_client
 from .catalog_utils import filter_channels, create_meta
 
 load_dotenv()
@@ -58,8 +58,52 @@ SERVICE_NAME = "EyePeaTeaVea"
 RATE_LIMIT_REQUESTS = 10  # Maximum requests per window
 RATE_LIMIT_WINDOW_SECONDS = 3600  # Time window in seconds (1 hour)
 
+def validate_configuration() -> None:
+    """
+    Validate application configuration at startup.
+    
+    Checks that required environment variables are set and valid.
+    Raises ValueError if configuration is invalid.
+    """
+    errors = []
+    
+    # Validate Redis URL
+    if not REDIS_URL:
+        errors.append("REDIS_URL is not set")
+    elif not REDIS_URL.startswith(("redis://", "rediss://")):
+        errors.append(f"REDIS_URL must start with redis:// or rediss://, got: {REDIS_URL}")
+    
+    # Validate HOST_URL
+    if not HOST_URL:
+        errors.append("HOST_URL is not set")
+    else:
+        try:
+            validate_url(HOST_URL)
+        except ValueError as e:
+            errors.append(f"Invalid HOST_URL: {e}")
+    
+    # Validate addon configuration (warn but don't fail)
+    if not ADDON_ID:
+        logger.warning("ADDON_ID is not set, using default")
+    if not ADDON_NAME:
+        logger.warning("ADDON_NAME is not set, using default")
+    
+    if errors:
+        error_msg = "Configuration validation failed:\n" + "\n".join(f"  - {error}" for error in errors)
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    
+    logger.info("Configuration validation passed")
+
 redis_store = RedisStore(REDIS_URL)
 scheduler = Scheduler()
+
+# Validate configuration at module load time
+try:
+    validate_configuration()
+except ValueError as e:
+    logger.error(f"Startup configuration error: {e}")
+    # Don't raise here - let the application start and fail gracefully if needed
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -69,6 +113,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         scheduler.stop_scheduler()
+        await close_http_client()  # Clean up HTTP client connections
         logger.info("FastAPI application shutdown event triggered.")
 
 app = FastAPI(lifespan=lifespan)
@@ -259,29 +304,83 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint to verify Redis connectivity."""
+    """
+    Health check endpoint with comprehensive status information.
+    
+    Returns detailed health status including:
+    - Overall service status
+    - Redis connectivity
+    - Configuration status
+    - Service metadata
+    """
+    health_status = {
+        "status": "healthy",
+        "service": SERVICE_NAME,
+        "version": ADDON_VERSION,
+        "timestamp": datetime.now().isoformat(),
+        "checks": {}
+    }
+    
+    # Check Redis connectivity
     try:
         is_connected = redis_store.is_connected()
         if is_connected:
-            return {
-                "status": "healthy",
-                "redis": "connected",
-                "service": SERVICE_NAME
-            }
+            # Try a simple operation to verify Redis is actually working
+            try:
+                redis_store.redis_client.ping()
+                health_status["checks"]["redis"] = {
+                    "status": "healthy",
+                    "connected": True,
+                    "url": REDIS_URL.split("@")[-1] if "@" in REDIS_URL else REDIS_URL  # Hide credentials
+                }
+            except Exception as e:
+                health_status["checks"]["redis"] = {
+                    "status": "degraded",
+                    "connected": False,
+                    "error": str(e)
+                }
+                health_status["status"] = "degraded"
         else:
-            return {
-                "status": "degraded",
-                "redis": "disconnected",
-                "service": SERVICE_NAME
+            health_status["checks"]["redis"] = {
+                "status": "unhealthy",
+                "connected": False
             }
+            health_status["status"] = "degraded"
     except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        return {
+        health_status["checks"]["redis"] = {
             "status": "unhealthy",
-            "redis": "error",
-            "service": SERVICE_NAME,
             "error": str(e)
         }
+        health_status["status"] = "unhealthy"
+    
+    # Check configuration
+    try:
+        config_valid = True
+        config_errors = []
+        
+        if not REDIS_URL:
+            config_valid = False
+            config_errors.append("REDIS_URL not set")
+        if not HOST_URL:
+            config_valid = False
+            config_errors.append("HOST_URL not set")
+        
+        health_status["checks"]["configuration"] = {
+            "status": "healthy" if config_valid else "degraded",
+            "valid": config_valid
+        }
+        if config_errors:
+            health_status["checks"]["configuration"]["errors"] = config_errors
+            if health_status["status"] == "healthy":
+                health_status["status"] = "degraded"
+    except Exception as e:
+        health_status["checks"]["configuration"] = {
+            "status": "unhealthy",
+            "error": str(e)
+        }
+        health_status["status"] = "unhealthy"
+    
+    return health_status
 
 @app.post("/configure", dependencies=[Depends(rate_limit_dependency)])
 async def configure_addon(
