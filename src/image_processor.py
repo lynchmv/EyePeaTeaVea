@@ -5,6 +5,7 @@ This module handles:
 - Placeholder image generation
 - Image fetching and caching
 - Image resizing and formatting for different use cases (poster, background, logo, icon)
+- Local repository support for tv-logos to avoid rate limiting
 """
 import os
 import httpx
@@ -12,9 +13,25 @@ import asyncio
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 import logging
+from urllib.parse import urlparse, parse_qs
+from dotenv import load_dotenv
 from .redis_store import RedisStore
 
+load_dotenv()
+
 logger = logging.getLogger(__name__)
+
+# Local tv-logos repository path (optional, set via TV_LOGOS_REPO_PATH env var)
+TV_LOGOS_REPO_PATH = os.getenv("TV_LOGOS_REPO_PATH", "").strip()
+if TV_LOGOS_REPO_PATH:
+    TV_LOGOS_REPO_PATH = os.path.abspath(TV_LOGOS_REPO_PATH)
+    if not os.path.isdir(TV_LOGOS_REPO_PATH):
+        logger.warning(f"TV_LOGOS_REPO_PATH '{TV_LOGOS_REPO_PATH}' is not a valid directory. Local repo disabled.")
+        TV_LOGOS_REPO_PATH = ""
+    else:
+        logger.info(f"Local tv-logos repository enabled at: {TV_LOGOS_REPO_PATH}")
+else:
+    logger.info("Local tv-logos repository disabled (TV_LOGOS_REPO_PATH not set)")
 
 # Image dimension constants
 POSTER_WIDTH = 500
@@ -41,6 +58,75 @@ IMAGE_FETCH_TIMEOUT_SECONDS = 10
 MAX_RETRIES = 3
 INITIAL_RETRY_DELAY = 1.0  # seconds
 RETRY_BACKOFF_MULTIPLIER = 2.0  # exponential backoff multiplier
+
+# GitHub tv-logos repository URL pattern
+GITHUB_TV_LOGOS_BASE = "https://github.com/tv-logo/tv-logos/blob/main/"
+
+def github_url_to_local_path(url: str) -> str | None:
+    """
+    Convert a GitHub tv-logos URL to a local file path.
+    
+    Converts URLs like:
+    https://github.com/tv-logo/tv-logos/blob/main/countries/united-states/c-span-1-us.png?raw=true
+    To local paths like:
+    {TV_LOGOS_REPO_PATH}/countries/united-states/c-span-1-us.png
+    
+    Args:
+        url: GitHub URL to convert
+        
+    Returns:
+        Local file path if URL matches GitHub tv-logos pattern and repo is configured, None otherwise
+    """
+    if not TV_LOGOS_REPO_PATH:
+        return None
+    
+    if not url.startswith(GITHUB_TV_LOGOS_BASE):
+        return None
+    
+    try:
+        # Parse URL to extract path
+        parsed = urlparse(url)
+        # Remove query parameters (?raw=true)
+        path = parsed.path
+        
+        # Extract the file path after /blob/main/
+        if "/blob/main/" in path:
+            file_path = path.split("/blob/main/", 1)[1]
+            local_path = os.path.join(TV_LOGOS_REPO_PATH, file_path)
+            
+            # Normalize path to prevent directory traversal
+            local_path = os.path.normpath(local_path)
+            
+            # Ensure the path is within the repo directory (security check)
+            if not local_path.startswith(os.path.normpath(TV_LOGOS_REPO_PATH)):
+                logger.warning(f"Invalid path detected (directory traversal attempt): {url}")
+                return None
+            
+            return local_path
+    except Exception as e:
+        logger.debug(f"Error converting GitHub URL to local path: {url} - {e}")
+        return None
+    
+    return None
+
+def read_local_image(file_path: str) -> bytes | None:
+    """
+    Read an image file from the local filesystem.
+    
+    Args:
+        file_path: Path to the image file
+        
+    Returns:
+        Image content as bytes if file exists and is readable, None otherwise
+    """
+    try:
+        if os.path.exists(file_path) and os.path.isfile(file_path):
+            with open(file_path, 'rb') as f:
+                return f.read()
+    except Exception as e:
+        logger.debug(f"Error reading local image file {file_path}: {e}")
+    
+    return None
 
 def generate_placeholder_image(
     title: str = "No Logo", 
@@ -118,7 +204,11 @@ async def fetch_image_content(redis_store: RedisStore, url: str) -> bytes:
     """
     Fetch image content from URL with caching support and retry logic.
     
-    Checks Redis cache first, then fetches from URL if not cached.
+    Checks in this order:
+    1. Redis cache
+    2. Local tv-logos repository (if enabled and URL matches)
+    3. HTTP fetch with retry logic
+    
     Implements retry logic with exponential backoff for rate limiting (429 errors).
     Caches successful fetches for future use.
     
@@ -139,6 +229,18 @@ async def fetch_image_content(redis_store: RedisStore, url: str) -> bytes:
     if cached_content:
         logger.debug(f"Returning cached image content for {url}")
         return cached_content
+    
+    # Try local repository first (for GitHub tv-logos URLs)
+    local_path = github_url_to_local_path(url)
+    if local_path:
+        local_content = read_local_image(local_path)
+        if local_content:
+            logger.debug(f"Using local image from repository: {local_path}")
+            # Cache the local content for future use
+            redis_store.set(cache_key, local_content, expiration_time=IMAGE_CACHE_EXPIRATION_SECONDS)
+            return local_content
+        else:
+            logger.debug(f"Local image not found at {local_path}, falling back to HTTP fetch")
 
     # Retry logic with exponential backoff for rate limiting
     retry_delay = INITIAL_RETRY_DELAY
@@ -180,6 +282,7 @@ async def fetch_image_content(redis_store: RedisStore, url: str) -> bytes:
                     raise ValueError(f"Unexpected content type: {response.headers.get('Content-Type', 'unknown')}")
                 
                 content = response.content
+                # Cache the fetched content for future use
                 redis_store.set(cache_key, content, expiration_time=IMAGE_CACHE_EXPIRATION_SECONDS)
                 return content
                 
