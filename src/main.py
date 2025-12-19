@@ -61,18 +61,18 @@ RATE_LIMIT_WINDOW_SECONDS = 3600  # Time window in seconds (1 hour)
 def validate_configuration() -> None:
     """
     Validate application configuration at startup.
-    
+
     Checks that required environment variables are set and valid.
     Raises ValueError if configuration is invalid.
     """
     errors = []
-    
+
     # Validate Redis URL
     if not REDIS_URL:
         errors.append("REDIS_URL is not set")
     elif not REDIS_URL.startswith(("redis://", "rediss://")):
         errors.append(f"REDIS_URL must start with redis:// or rediss://, got: {REDIS_URL}")
-    
+
     # Validate HOST_URL
     if not HOST_URL:
         errors.append("HOST_URL is not set")
@@ -81,18 +81,18 @@ def validate_configuration() -> None:
             validate_url(HOST_URL)
         except ValueError as e:
             errors.append(f"Invalid HOST_URL: {e}")
-    
+
     # Validate addon configuration (warn but don't fail)
     if not ADDON_ID:
         logger.warning("ADDON_ID is not set, using default")
     if not ADDON_NAME:
         logger.warning("ADDON_NAME is not set, using default")
-    
+
     if errors:
         error_msg = "Configuration validation failed:\n" + "\n".join(f"  - {error}" for error in errors)
         logger.error(error_msg)
         raise ValueError(error_msg)
-    
+
     logger.info("Configuration validation passed")
 
 redis_store = RedisStore(REDIS_URL)
@@ -157,7 +157,7 @@ def get_client_identifier(request: Request) -> str:
         client_ip = forwarded_for.split(",")[0].strip()
     else:
         client_ip = request.client.host if request.client else "unknown"
-    
+
     return f"rate_limit:{client_ip}"
 
 async def rate_limit_dependency(request: Request) -> None:
@@ -174,33 +174,33 @@ async def check_rate_limit(
 ) -> None:
     """
     Rate limiting dependency using Redis atomic INCR operation.
-    
+
     Uses Redis INCR for atomic counter increments, ensuring thread-safe
     rate limiting even under high concurrency.
-    
+
     Args:
         request: FastAPI request object
         limit: Maximum number of requests allowed in the window (default: 10)
         window_seconds: Time window in seconds (default: 1 hour = 3600s)
-        
+
     Raises:
         HTTPException: If rate limit is exceeded (HTTP 429)
     """
     try:
         client_id = get_client_identifier(request)
         rate_limit_key = f"{client_id}"
-        
+
         # Atomically increment counter using Redis INCR
         # This ensures thread-safe counting even under high concurrency
         count = redis_store.incr(rate_limit_key, expiration_time=window_seconds)
-        
+
         if count > limit:
             logger.warning(f"Rate limit exceeded for {client_id}: {count}/{limit} requests in {window_seconds}s")
             raise HTTPException(
                 status_code=429,
                 detail=f"Rate limit exceeded. Maximum {limit} requests per {window_seconds // 60} minutes. Please try again later."
             )
-        
+
     except HTTPException:
         raise
     except RedisConnectionError:
@@ -215,16 +215,16 @@ async def check_rate_limit(
 async def get_user_data_dependency(secret_str: str) -> UserData:
     """
     Dependency function to validate secret_str and retrieve user data.
-    
+
     Validates the secret_str format and retrieves user configuration from Redis.
     Raises appropriate HTTP exceptions for invalid or missing configurations.
-    
+
     Args:
         secret_str: User's secret string (validated)
-        
+
     Returns:
         UserData instance for the user
-        
+
     Raises:
         HTTPException: 400 if secret_str is invalid, 404 if not found, 503 if Redis unavailable
     """
@@ -233,7 +233,7 @@ async def get_user_data_dependency(secret_str: str) -> UserData:
         validate_secret_str(secret_str)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid secret_str: {e}")
-    
+
     try:
         user_data = redis_store.get_user_data(secret_str)
         if not user_data:
@@ -246,21 +246,21 @@ async def get_user_data_dependency(secret_str: str) -> UserData:
 def get_channel_data(secret_str: str, tvg_id: str) -> dict:
     """
     Retrieve and parse channel data from Redis.
-    
+
     Args:
         secret_str: User's secret string
         tvg_id: Channel identifier
-        
+
     Returns:
         Parsed channel dictionary
-        
+
     Raises:
         HTTPException: If channel not found or JSON parsing fails
     """
     channel_json = redis_store.get_channel(secret_str, tvg_id)
     if not channel_json:
         raise HTTPException(status_code=404, detail=f"Channel with tvg_id: {tvg_id} not found.")
-    
+
     try:
         return json.loads(channel_json)
     except json.JSONDecodeError as e:
@@ -275,27 +275,27 @@ async def get_image_response(
 ) -> Response:
     """
     Common helper function for image endpoints.
-    
+
     Args:
         secret_str: User's secret string
         tvg_id: Channel identifier
         image_processor_func: Async function to process the image (get_poster, get_background, etc.)
         media_type: MIME type for the response
-        
+
     Returns:
         FastAPI Response with image content
-        
+
     Raises:
         HTTPException: If channel not found or image processing fails
     """
     channel = get_channel_data(secret_str, tvg_id)
     image_url = channel["tvg_logo"]
     title = channel["tvg_name"]
-    
+
     processed_image_bytes = await image_processor_func(redis_store, tvg_id, image_url, title)
     if not processed_image_bytes.getvalue():
         raise HTTPException(status_code=500, detail=f"Image processing failed for tvg_id: {tvg_id}")
-    
+
     return Response(content=processed_image_bytes.getvalue(), media_type=media_type)
 
 @app.get("/")
@@ -306,7 +306,7 @@ async def root():
 async def health_check():
     """
     Health check endpoint with comprehensive status information.
-    
+
     Returns detailed health status including:
     - Overall service status
     - Redis connectivity
@@ -320,7 +320,7 @@ async def health_check():
         "timestamp": datetime.now().isoformat(),
         "checks": {}
     }
-    
+
     # Check Redis connectivity
     try:
         is_connected = redis_store.is_connected()
@@ -352,19 +352,19 @@ async def health_check():
             "error": str(e)
         }
         health_status["status"] = "unhealthy"
-    
+
     # Check configuration
     try:
         config_valid = True
         config_errors = []
-        
+
         if not REDIS_URL:
             config_valid = False
             config_errors.append("REDIS_URL not set")
         if not HOST_URL:
             config_valid = False
             config_errors.append("HOST_URL not set")
-        
+
         health_status["checks"]["configuration"] = {
             "status": "healthy" if config_valid else "degraded",
             "valid": config_valid
@@ -379,7 +379,7 @@ async def health_check():
             "error": str(e)
         }
         health_status["status"] = "unhealthy"
-    
+
     return health_status
 
 @app.post("/configure", dependencies=[Depends(rate_limit_dependency)])
@@ -401,7 +401,7 @@ async def configure_addon(
 
         logger.info(f"Triggering immediate M3U fetch for secret_str: {secret_str[:8]}...")
         scheduler.trigger_m3u_fetch_for_user(secret_str, user_data)
-        
+
         # Reload scheduler to include the new user's scheduled job
         logger.info(f"Reloading scheduler to include new configuration for secret_str: {secret_str[:8]}...")
         scheduler.start_scheduler()
@@ -415,7 +415,7 @@ async def configure_addon(
 async def get_config(secret_str: str, user_data: UserData = Depends(get_user_data_dependency)):
     """
     Get the current configuration for a user (read-only, for UI purposes).
-    
+
     Note: Password is never returned for security reasons. Use a boolean
     to indicate if a password is set.
     """
@@ -436,7 +436,7 @@ async def update_configure_addon(
     """Update an existing user configuration. Only provided fields will be updated."""
     try:
         logger.info(f"Update configuration requested for secret_str: {secret_str[:8]}...")
-        
+
         # Merge update request with existing user data
         # Only update fields that are provided (not None)
         # For addon_password, empty string means remove password (set to None)
@@ -451,7 +451,7 @@ async def update_configure_addon(
                 updated_password = hash_password(request.addon_password)
         else:
             updated_password = user_data.addon_password
-        
+
         # Create updated user data
         updated_user_data = UserData(
             m3u_sources=updated_m3u_sources,
@@ -459,18 +459,18 @@ async def update_configure_addon(
             host_url=updated_host_url,
             addon_password=updated_password
         )
-        
+
         # Store updated configuration
         redis_store.store_user_data(secret_str, updated_user_data)
-        
+
         logger.info(f"Configuration updated for secret_str: {secret_str[:8]}...")
         logger.info(f"Triggering immediate M3U fetch for secret_str: {secret_str[:8]}...")
         scheduler.trigger_m3u_fetch_for_user(secret_str, updated_user_data)
-        
+
         # Reload scheduler to update the scheduled job with new cron expression if it changed
         logger.info(f"Reloading scheduler to update configuration for secret_str: {secret_str[:8]}...")
         scheduler.start_scheduler()
-        
+
         return {
             "secret_str": secret_str,
             "message": "Configuration updated successfully.",
@@ -510,6 +510,10 @@ async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_d
         "name": ADDON_NAME,
         "description": ADDON_DESCRIPTION,
         "logo": f"{HOST_URL}/static/logo.png",
+        "behaviorHints": {
+            "configurable": true,
+            "configurationRequired": false
+        },
         "resources": [
             "catalog",
             {"name": "meta", "types": ["tv", "events"], "idPrefixes": [ADDON_ID_PREFIX]},
@@ -570,7 +574,7 @@ async def get_icon_image(secret_str: str, tvg_id: str, user_data: UserData = Dep
         image_url = channel["tvg_logo"]
         channel_name = channel["tvg_name"]
         processed_image_bytes = await get_icon(redis_store, tvg_id, image_url, channel_name)
-    
+
     if not processed_image_bytes.getvalue():
         raise HTTPException(status_code=500, detail=f"Image processing failed for tvg_id: {tvg_id}")
     return Response(content=processed_image_bytes.getvalue(), media_type="image/png")
@@ -596,11 +600,11 @@ async def get_catalog(
         channels_data = redis_store.get_all_channels(secret_str)
         if not channels_data:
             return {"metas": []}
-            
+
         filtered_channels = filter_channels(channels_data, type, extra_name, extra_value)
-        
+
         metas = [create_meta(channel, secret_str, ADDON_ID_PREFIX, HOST_URL) for channel in filtered_channels]
-        
+
         return {"metas": metas}
 
     raise HTTPException(status_code=404, detail=f"Catalog with type: {type} and id: {id} not found.")
@@ -643,7 +647,7 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
 @app.get("/{secret_str}/stream/{type}/{id}.json")
 async def get_stream(secret_str: str, type: str, id: str, user_data: UserData = Depends(get_user_data_dependency)):
     logger.info(f"Stream endpoint accessed for secret_str: {secret_str[:8]}..., type: {type}, id: {id}")
-    
+
     if (type == "tv" or type == "events") and (id.startswith(f"{ADDON_ID_PREFIX}_event_") or id.startswith(ADDON_ID_PREFIX)):
         if id.startswith(f"{ADDON_ID_PREFIX}_event_"):
             parts = id.split('_')

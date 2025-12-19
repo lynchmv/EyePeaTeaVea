@@ -4,8 +4,12 @@ FROM python:3.11-slim
 # Set the working directory in the container
 WORKDIR /app
 
-# Install git for cloning tv-logos repository (optional)
-RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+# Install git and fonts for cloning tv-logos repository and better text rendering
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    fonts-dejavu-core \
+    fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install any needed packages specified in requirements.txt
 COPY requirements.txt .
