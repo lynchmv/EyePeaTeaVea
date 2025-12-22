@@ -360,20 +360,19 @@ async def configure_page(secret_str: str):
     """
     Serve the configuration page with the secret_str pre-filled and in update mode.
     This allows users to access /{secret_str}/configure directly to update their configuration.
+    
+    Always returns the HTML page, even if the secret_str doesn't exist.
+    The frontend will handle displaying an appropriate error message when it tries to load the config.
     """
-    # Validate that the secret_str exists
+    # Validate secret_str format only (don't check if it exists - let frontend handle that)
     try:
         validate_secret_str(secret_str)
-        user_data = redis_store.get_user_data(secret_str)
-        if not user_data:
-            raise HTTPException(status_code=404, detail=f"Configuration not found for secret_str: {secret_str}")
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid secret_str: {e}")
-    except RedisConnectionError as e:
-        logger.error(f"Redis connection error while fetching user data: {e}")
-        raise HTTPException(status_code=503, detail="Service temporarily unavailable: Redis connection failed")
+    except ValueError:
+        # Invalid format - still return HTML page, frontend will show error when trying to load
+        pass
     
-    # Return the frontend page - the frontend will detect the secret_str in the URL and auto-load
+    # Always return the frontend page - the frontend will detect the secret_str in the URL
+    # and attempt to auto-load. If the secret_str doesn't exist, the frontend will show an error.
     return FileResponse('frontend/index.html')
 
 @app.get("/health")

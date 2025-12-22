@@ -66,6 +66,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 secretStrInput.value = secretStr;
                 
                 // Auto-load the configuration
+                // The loadConfigBtn click handler will show an error toast if the config doesn't exist
                 if (loadConfigBtn) {
                     loadConfigBtn.click();
                 }
@@ -100,18 +101,18 @@ document.addEventListener('DOMContentLoaded', () => {
         loadConfigBtn.textContent = 'Loading...';
 
         try {
-            // Fetch manifest to verify secret_str exists and get user data
-            const response = await fetch(`/${secretStr}/manifest.json`);
-            if (!response.ok) {
-                throw new Error('Configuration not found. Please check your secret_str.');
-            }
-
-            // We need to get the user data - let's try to fetch it from the backend
-            // Since we don't have a direct endpoint, we'll need to add one or use the manifest
-            // For now, let's add an endpoint to get user config (read-only)
+            // First verify the secret_str exists by checking the config endpoint
             const configResponse = await fetch(`/${secretStr}/config`);
             if (!configResponse.ok) {
-                throw new Error('Could not load configuration.');
+                if (configResponse.status === 404) {
+                    throw new Error(`Configuration not found for this secret_str. Please check the URL or create a new configuration.`);
+                } else if (configResponse.status === 400) {
+                    throw new Error('Invalid secret_str format. Please check the URL.');
+                } else if (configResponse.status === 503) {
+                    throw new Error('Service temporarily unavailable. Please try again in a few moments.');
+                } else {
+                    throw new Error('Could not load configuration. Please try again.');
+                }
             }
 
             const config = await configResponse.json();
