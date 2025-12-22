@@ -676,6 +676,13 @@ async def get_catalog(
 
 @app.get("/{secret_str}/meta/{type}/{id}.json")
 async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = Depends(get_user_data_dependency)):
+    # Handle empty placeholder items
+    if id in (f"{ADDON_ID_PREFIX}_empty_channels", f"{ADDON_ID_PREFIX}_empty_events"):
+        # Return a simple meta for the empty placeholder
+        empty_meta = create_empty_meta(type, secret_str, ADDON_ID_PREFIX, HOST_URL)
+        empty_meta.update({"runtime": "", "releaseInfo": "", "links": []})
+        return {"meta": empty_meta}
+    
     if type == "events" and id.startswith(f"{ADDON_ID_PREFIX}_event_"):
         parts = id.split('_')
         tvg_id = parts[2]
@@ -714,11 +721,20 @@ async def get_stream(secret_str: str, type: str, id: str, user_data: UserData = 
     logger.info(f"Stream endpoint accessed for secret_str: {secret_str[:8]}..., type: {type}, id: {id}")
 
     if (type == "tv" or type == "events") and (id.startswith(f"{ADDON_ID_PREFIX}_event_") or id.startswith(ADDON_ID_PREFIX)):
+        # Handle empty placeholder items
+        if id in (f"{ADDON_ID_PREFIX}_empty_channels", f"{ADDON_ID_PREFIX}_empty_events"):
+            raise HTTPException(status_code=404, detail="This is a placeholder item indicating no content is available. There are no streams to play.")
+        
         if id.startswith(f"{ADDON_ID_PREFIX}_event_"):
             parts = id.split('_')
             tvg_id = parts[2]
         else:
             tvg_id = id.replace(ADDON_ID_PREFIX, "")
+        
+        # Handle empty_placeholder tvg_id
+        if tvg_id == "empty_placeholder":
+            raise HTTPException(status_code=404, detail="This is a placeholder item indicating no content is available. There are no streams to play.")
+        
         channel_json = redis_store.get_channel(secret_str, tvg_id)
         if channel_json:
             try:

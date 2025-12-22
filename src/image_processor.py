@@ -606,35 +606,17 @@ async def fetch_image_content(redis_store: RedisStore, url: str) -> bytes:
         return cached_content
     
     # Try local repository first (for GitHub tv-logos URLs)
-    if url.startswith("https://github.com/tv-logo/tv-logos"):
-        logger.info(f"GitHub tv-logos URL detected: {url}")
-        logger.info(f"  TV_LOGOS_REPO_PATH configured: {bool(TV_LOGOS_REPO_PATH)}")
-        if TV_LOGOS_REPO_PATH:
-            logger.info(f"  TV_LOGOS_REPO_PATH value: {TV_LOGOS_REPO_PATH}")
-            logger.info(f"  TV_LOGOS_REPO_PATH exists: {os.path.exists(TV_LOGOS_REPO_PATH)}")
-            logger.info(f"  TV_LOGOS_REPO_PATH isdir: {os.path.isdir(TV_LOGOS_REPO_PATH) if os.path.exists(TV_LOGOS_REPO_PATH) else 'N/A'}")
-    
     local_path = github_url_to_local_path(url)
     if local_path:
-        logger.info(f"Checking local repository for: {url}")
-        logger.info(f"  Converted to local path: {local_path}")
-        logger.info(f"  File exists: {os.path.exists(local_path)}")
-        if os.path.exists(local_path):
-            logger.info(f"  File is file: {os.path.isfile(local_path)}")
-            logger.info(f"  File size: {os.path.getsize(local_path) if os.path.isfile(local_path) else 'N/A'} bytes")
+        logger.debug(f"Checking local repository for: {url}")
         local_content = read_local_image(local_path)
         if local_content:
-            logger.info(f"✓ Using local image from repository: {local_path} ({len(local_content)} bytes)")
+            logger.debug(f"✓ Using local image from repository: {local_path} ({len(local_content)} bytes)")
             # Cache the local content for future use
             redis_store.set(cache_key, local_content, expiration_time=IMAGE_CACHE_EXPIRATION_SECONDS)
             return local_content
         else:
-            logger.warning(f"✗ Local image not found or unreadable at {local_path}, falling back to HTTP fetch")
-    else:
-        if url.startswith("https://github.com/tv-logo/tv-logos"):
-            logger.warning(f"✗ GitHub tv-logos URL detected but local repo check returned None")
-            logger.warning(f"  TV_LOGOS_REPO_PATH: {TV_LOGOS_REPO_PATH}")
-            logger.warning(f"  URL matches base pattern: {url.startswith(GITHUB_TV_LOGOS_BASE)}")
+            logger.debug(f"✗ Local image not found at {local_path}, falling back to HTTP fetch")
 
     # Retry logic with exponential backoff for rate limiting
     retry_delay = INITIAL_RETRY_DELAY
