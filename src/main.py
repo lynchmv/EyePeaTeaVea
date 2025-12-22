@@ -490,7 +490,8 @@ async def configure_addon(
             m3u_sources=request.m3u_sources,
             parser_schedule_crontab=request.parser_schedule_crontab,
             host_url=request.host_url,
-            addon_password=hashed_password
+            addon_password=hashed_password,
+            timezone=request.timezone
         )
         redis_store.store_user_data(secret_str, user_data)
         
@@ -525,7 +526,8 @@ async def get_config(secret_str: str, user_data: UserData = Depends(get_user_dat
         "m3u_sources": user_data.m3u_sources,
         "parser_schedule_crontab": user_data.parser_schedule_crontab,
         "host_url": str(user_data.host_url),
-        "has_password": user_data.addon_password is not None  # Never return actual password
+        "has_password": user_data.addon_password is not None,  # Never return actual password
+        "timezone": user_data.timezone
     }
 
 @app.put("/{secret_str}/configure")
@@ -550,6 +552,7 @@ async def update_configure_addon(
         updated_m3u_sources = request.m3u_sources if request.m3u_sources is not None else user_data.m3u_sources
         updated_crontab = request.parser_schedule_crontab if request.parser_schedule_crontab is not None else user_data.parser_schedule_crontab
         updated_host_url = request.host_url if request.host_url is not None else user_data.host_url
+        updated_timezone = request.timezone if request.timezone is not None else user_data.timezone
         if request.addon_password is not None:
             # Empty string means remove password, otherwise hash the provided value
             if request.addon_password == "":
@@ -564,7 +567,8 @@ async def update_configure_addon(
             m3u_sources=updated_m3u_sources,
             parser_schedule_crontab=updated_crontab,
             host_url=updated_host_url,
-            addon_password=updated_password
+            addon_password=updated_password,
+            timezone=updated_timezone
         )
 
         # Store updated configuration
@@ -858,13 +862,23 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
                                 logger.debug(f"Error parsing EPG program datetime: {e}")
                                 continue
                         
+                        # Get user's timezone or default to UTC
+                        user_tz_str = user_data.timezone or "UTC"
+                        try:
+                            user_tz = pytz.timezone(user_tz_str)
+                        except pytz.exceptions.UnknownTimeZoneError:
+                            logger.warning(f"Invalid timezone '{user_tz_str}' for user {secret_str[:8]}..., defaulting to UTC")
+                            user_tz = pytz.UTC
+                        
                         # Build description with EPG info
                         description_parts = [meta["description"]]
                         
                         if current_program:
                             start_dt = current_program.get("_start_dt")
                             if start_dt:
-                                start_time = start_dt.strftime("%I:%M %p")
+                                # Convert to user's timezone
+                                start_dt_local = start_dt.astimezone(user_tz)
+                                start_time = start_dt_local.strftime("%I:%M %p")
                             else:
                                 start_time = ""
                             desc_text = current_program.get("desc", "")
@@ -879,7 +893,9 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
                             for prog in upcoming_programs:
                                 start_dt = prog.get("_start_dt")
                                 if start_dt:
-                                    start_time = start_dt.strftime("%I:%M %p")
+                                    # Convert to user's timezone
+                                    start_dt_local = start_dt.astimezone(user_tz)
+                                    start_time = start_dt_local.strftime("%I:%M %p")
                                 else:
                                     start_time = ""
                                 description_parts.append(f"• {prog['title']} ({start_time})")
@@ -892,7 +908,9 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
                         elif upcoming_programs:
                             next_start_dt = upcoming_programs[0].get("_start_dt")
                             if next_start_dt:
-                                next_start = next_start_dt.strftime("%I:%M %p")
+                                # Convert to user's timezone
+                                next_start_dt_local = next_start_dt.astimezone(user_tz)
+                                next_start = next_start_dt_local.strftime("%I:%M %p")
                             else:
                                 next_start = ""
                             meta["releaseInfo"] = f"Next: {upcoming_programs[0]['title']} at {next_start}"

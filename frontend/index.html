@@ -54,6 +54,14 @@
                         <label for="addon_password" class="form-label">Addon Password (optional)</label>
                         <input type="password" class="form-control" id="addon_password" name="addon_password">
                     </div>
+                    <div class="mb-3">
+                        <label for="timezone" class="form-label">Timezone (optional)</label>
+                        <select class="form-select" id="timezone" name="timezone">
+                            <option value="">Auto-detect (recommended)</option>
+                            <!-- Common timezones will be populated by JavaScript -->
+                        </select>
+                        <small class="form-text text-muted">Used to display EPG program times in your local timezone. Leave as "Auto-detect" to use your browser's timezone.</small>
+                    </div>
                     <div class="d-grid gap-2 mb-3">
                         <button type="submit" class="btn btn-primary" id="submit-btn">
                             <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true" style="display: none;"></span>

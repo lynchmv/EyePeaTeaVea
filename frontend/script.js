@@ -34,6 +34,59 @@ document.addEventListener('DOMContentLoaded', () => {
     if (hostUrlInput) {
         hostUrlInput.value = window.location.origin;
     }
+    
+    // Auto-detect and set timezone
+    const timezoneSelect = document.getElementById('timezone');
+    if (timezoneSelect) {
+        // Get browser's timezone
+        const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        
+        // Populate common timezones
+        const commonTimezones = [
+            { value: 'America/New_York', label: 'Eastern Time (US)' },
+            { value: 'America/Chicago', label: 'Central Time (US)' },
+            { value: 'America/Denver', label: 'Mountain Time (US)' },
+            { value: 'America/Los_Angeles', label: 'Pacific Time (US)' },
+            { value: 'America/Toronto', label: 'Eastern Time (Canada)' },
+            { value: 'America/Vancouver', label: 'Pacific Time (Canada)' },
+            { value: 'Europe/London', label: 'London' },
+            { value: 'Europe/Paris', label: 'Paris' },
+            { value: 'Europe/Berlin', label: 'Berlin' },
+            { value: 'Europe/Rome', label: 'Rome' },
+            { value: 'Europe/Madrid', label: 'Madrid' },
+            { value: 'Asia/Tokyo', label: 'Tokyo' },
+            { value: 'Asia/Shanghai', label: 'Shanghai' },
+            { value: 'Asia/Dubai', label: 'Dubai' },
+            { value: 'Australia/Sydney', label: 'Sydney' },
+            { value: 'Australia/Melbourne', label: 'Melbourne' },
+            { value: 'UTC', label: 'UTC' }
+        ];
+        
+        // Add common timezones to select
+        commonTimezones.forEach(tz => {
+            const option = document.createElement('option');
+            option.value = tz.value;
+            option.textContent = tz.label;
+            if (tz.value === browserTimezone) {
+                option.selected = true;
+            }
+            timezoneSelect.appendChild(option);
+        });
+        
+        // If browser timezone is not in common list, add it
+        if (!commonTimezones.find(tz => tz.value === browserTimezone)) {
+            const option = document.createElement('option');
+            option.value = browserTimezone;
+            option.textContent = `${browserTimezone} (detected)`;
+            option.selected = true;
+            timezoneSelect.insertBefore(option, timezoneSelect.firstChild.nextSibling);
+        }
+        
+        // Set the detected timezone as default if no value is set
+        if (!timezoneSelect.value && browserTimezone) {
+            timezoneSelect.value = browserTimezone;
+        }
+    }
 
     if (navigator.share) {
         document.getElementById('shareBtn').style.display = 'inline-block';
@@ -123,6 +176,10 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('host_url').value = config.host_url;
             // Password field should remain empty for security (has_password is just a boolean)
             document.getElementById('addon_password').value = '';
+            // Set timezone if available
+            if (config.timezone) {
+                document.getElementById('timezone').value = config.timezone;
+            }
 
             // Only show toast if not auto-loading (to avoid annoying popup on page load)
             const isAutoLoad = window.location.pathname.match(/^\/([^\/]+)\/configure$/);
@@ -196,12 +253,14 @@ async function getManifestUrl(isRedirect = false) {
     const parserScheduleCrontab = document.getElementById('parser_schedule_crontab').value;
     const hostUrl = document.getElementById('host_url').value;
     const addonPassword = document.getElementById('addon_password').value;
+    const timezone = document.getElementById('timezone').value || null;
 
     const data = {
         m3u_sources: m3uSources,
         parser_schedule_crontab: parserScheduleCrontab,
         host_url: hostUrl,
-        addon_password: addonPassword || null
+        addon_password: addonPassword || null,
+        timezone: timezone
     };
 
     try {
@@ -271,6 +330,7 @@ async function updateConfiguration() {
     const parserScheduleCrontab = document.getElementById('parser_schedule_crontab').value.trim();
     const hostUrl = document.getElementById('host_url').value.trim();
     const addonPassword = document.getElementById('addon_password').value;
+    const timezone = document.getElementById('timezone').value || null;
 
     // Build update payload - only include fields that have values
     // Empty string for password means remove password
@@ -281,6 +341,8 @@ async function updateConfiguration() {
     // Always include password field - empty string means remove, undefined means don't change
     // But since we're updating, we should send the current value (even if empty)
     data.addon_password = addonPassword || '';
+    // Include timezone if set
+    if (timezone) data.timezone = timezone;
 
     try {
         const response = await fetch(`/${secretStr}/configure`, {
@@ -314,6 +376,12 @@ function clearForm() {
     document.getElementById('addon_password').value = '';
     document.getElementById('secret_str').value = '';
     document.getElementById('result').style.display = 'none';
+    // Reset timezone to auto-detect
+    const timezoneSelect = document.getElementById('timezone');
+    if (timezoneSelect) {
+        const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        timezoneSelect.value = browserTimezone || '';
+    }
 }
 
 function copyToClipboard(text) {

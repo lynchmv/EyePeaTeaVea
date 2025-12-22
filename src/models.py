@@ -8,19 +8,21 @@ This module defines all data models used throughout the application:
 """
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 from typing import Optional
-from .utils import validate_cron_expression, validate_url
+import pytz
+from .utils import validate_cron_expression, validate_url, validate_timezone
 
 class ConfigureRequest(BaseModel):
     """
     Request model for initial addon configuration.
     
-    All fields are required except addon_password. Includes validation
-    for M3U sources (URLs) and cron expressions.
+    All fields are required except addon_password and timezone. Includes validation
+    for M3U sources (URLs), cron expressions, and timezone.
     """
     m3u_sources: list[str] = Field(..., min_length=1, max_length=50)
     parser_schedule_crontab: str = "0 */6 * * *"
     host_url: HttpUrl
     addon_password: str | None = None
+    timezone: str | None = None
     
     @field_validator('m3u_sources')
     @classmethod
@@ -46,6 +48,14 @@ class ConfigureRequest(BaseModel):
     def validate_cron(cls, v: str) -> str:
         """Validate that the cron expression is valid."""
         return validate_cron_expression(v)
+    
+    @field_validator('timezone')
+    @classmethod
+    def validate_timezone(cls, v: str | None) -> str | None:
+        """Validate that the timezone is valid if provided."""
+        if v is not None:
+            return validate_timezone(v)
+        return v
 
 class UpdateConfigureRequest(BaseModel):
     """Request model for updating existing configuration. All fields are optional."""
@@ -53,6 +63,7 @@ class UpdateConfigureRequest(BaseModel):
     parser_schedule_crontab: str | None = None
     host_url: HttpUrl | None = None
     addon_password: str | None = None
+    timezone: str | None = None
     
     @field_validator('m3u_sources')
     @classmethod
@@ -81,12 +92,21 @@ class UpdateConfigureRequest(BaseModel):
         if v is not None:
             return validate_cron_expression(v)
         return v
+    
+    @field_validator('timezone')
+    @classmethod
+    def validate_timezone(cls, v: str | None) -> str | None:
+        """Validate that the timezone is valid if provided."""
+        if v is not None:
+            return validate_timezone(v)
+        return v
 
 class UserData(BaseModel):
     m3u_sources: list[str]
     parser_schedule_crontab: str = "0 */6 * * *"
     host_url: HttpUrl
     addon_password: str | None = None
+    timezone: str | None = None  # IANA timezone name (e.g., "America/New_York", "Europe/London")
 
 class Event(BaseModel):
     date: str

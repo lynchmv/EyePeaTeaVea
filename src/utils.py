@@ -8,11 +8,13 @@ This module provides helper functions for:
 - Validating cron expressions
 - Validating URLs
 - Validating secret_str format
+- Validating timezone names
 """
 import secrets
 import hashlib
 import re
 import bcrypt
+import pytz
 from urllib.parse import urlparse
 from apscheduler.triggers.cron import CronTrigger
 
@@ -168,6 +170,37 @@ def validate_url(url: str) -> str:
             raise ValueError(f"Invalid URL '{url}': missing file path")
     
     return url
+
+def validate_timezone(timezone_str: str) -> str:
+    """
+    Validates an IANA timezone name.
+    
+    Args:
+        timezone_str: IANA timezone name (e.g., "America/New_York", "Europe/London", "UTC")
+        
+    Returns:
+        The validated timezone string
+        
+    Raises:
+        ValueError: If the timezone is invalid
+        
+    Examples:
+        Valid: "America/New_York"
+        Valid: "Europe/London"
+        Valid: "UTC"
+        Invalid: "Invalid/Timezone"
+    """
+    if not timezone_str or not timezone_str.strip():
+        raise ValueError("Timezone cannot be empty")
+    
+    timezone_str = timezone_str.strip()
+    
+    # Check if it's a valid IANA timezone
+    try:
+        pytz.timezone(timezone_str)
+        return timezone_str
+    except pytz.exceptions.UnknownTimeZoneError:
+        raise ValueError(f"Invalid timezone: {timezone_str}. Must be a valid IANA timezone name (e.g., 'America/New_York', 'Europe/London', 'UTC')")
 
 def validate_secret_str(secret_str: str) -> str:
     """
