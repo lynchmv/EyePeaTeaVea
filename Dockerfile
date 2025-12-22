@@ -4,11 +4,13 @@ FROM python:3.11-slim
 # Set the working directory in the container
 WORKDIR /app
 
-# Install git and fonts for cloning tv-logos repository and better text rendering
+# Install git, fonts, and CA certificates for cloning tv-logos repository, text rendering, and SSL verification
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
+    ca-certificates \
     fonts-dejavu-core \
     fonts-liberation \
+    && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Install any needed packages specified in requirements.txt

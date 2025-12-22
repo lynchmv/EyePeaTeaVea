@@ -23,6 +23,8 @@ services:
       HOST_URL: https://stremio-dev.lynuxss.com
       # TV_LOGOS_REPO_PATH is set in Dockerfile, but can be overridden here if needed
       # TV_LOGOS_REPO_PATH: /app/tv-logos
+      # Disable SSL verification for problematic CDNs (set via .env)
+      DISABLE_SSL_VERIFY: ${DISABLE_SSL_VERIFY:-true}
       # ADDON_PASSWORD: your_addon_password # Uncomment and set in .env for production
     depends_on:
       - redis

@@ -70,6 +70,9 @@ IMAGE_CACHE_EXPIRATION_SECONDS = 60 * 60 * 24 * 7  # 7 days
 IMAGE_FETCH_TIMEOUT_SECONDS = 10
 PLACEHOLDER_CACHE_VERSION = "v12"  # Increment this when placeholder generation changes to invalidate old cached placeholders
 
+# SSL verification setting (can be disabled via DISABLE_SSL_VERIFY env var for problematic CDNs)
+DISABLE_SSL_VERIFY = os.getenv("DISABLE_SSL_VERIFY", "false").lower() == "true"
+
 # Retry constants for rate limiting
 MAX_RETRIES = 3
 INITIAL_RETRY_DELAY = 1.0  # seconds
@@ -93,9 +96,12 @@ def get_http_client() -> httpx.AsyncClient:
         _http_client = httpx.AsyncClient(
             timeout=IMAGE_FETCH_TIMEOUT_SECONDS,
             follow_redirects=True,
+            verify=not DISABLE_SSL_VERIFY,  # Disable SSL verification if env var is set
             limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"}
         )
+        if DISABLE_SSL_VERIFY:
+            logger.warning("SSL verification is DISABLED for image fetching (DISABLE_SSL_VERIFY=true). This is less secure but may be necessary for some CDNs.")
     return _http_client
 
 async def close_http_client() -> None:
