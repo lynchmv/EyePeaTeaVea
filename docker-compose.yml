@@ -12,12 +12,17 @@ services:
       - eyepeateavea_network
 
   app:
-    build: .
+    build:
+      context: .
+      args:
+        CLONE_TV_LOGOS: ${CLONE_TV_LOGOS:-false}  # Set CLONE_TV_LOGOS=true in .env or pass via command line
     ports:
       - "8020:8020"
     environment:
       REDIS_URL: redis://redis:6379/0
       HOST_URL: https://stremio-dev.lynuxss.com
+      # TV_LOGOS_REPO_PATH is set in Dockerfile, but can be overridden here if needed
+      # TV_LOGOS_REPO_PATH: /app/tv-logos
       # ADDON_PASSWORD: your_addon_password # Uncomment and set in .env for production
     depends_on:
       - redis

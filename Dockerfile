@@ -24,7 +24,10 @@ ARG CLONE_TV_LOGOS=false
 RUN if [ "$CLONE_TV_LOGOS" = "true" ]; then \
         echo "Cloning tv-logos repository..."; \
         git clone --depth 1 https://github.com/tv-logo/tv-logos.git /app/tv-logos && \
-        echo "tv-logos repository cloned successfully"; \
+        echo "tv-logos repository cloned successfully" && \
+        ls -la /app/tv-logos | head -20 && \
+        echo "Verifying repository structure..." && \
+        test -d /app/tv-logos/countries && echo "✓ Repository structure verified" || echo "✗ Warning: Repository structure incomplete"; \
     else \
         echo "Skipping tv-logos repository clone (set CLONE_TV_LOGOS=true to enable)"; \
     fi
@@ -35,8 +38,7 @@ EXPOSE 8020
 # Define environment variables
 ENV PYTHONUNBUFFERED 1
 
-# Set TV_LOGOS_REPO_PATH if repository was cloned
-# The application will check if the directory exists, so it's safe to set this
+# Set TV_LOGOS_REPO_PATH unconditionally - the application will check if the directory exists
 # Users can override this via environment variable at runtime if needed
 ENV TV_LOGOS_REPO_PATH=/app/tv-logos
 

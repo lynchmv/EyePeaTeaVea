@@ -107,7 +107,23 @@ except ValueError as e:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import os  # Import os module for this function
     logger.info("FastAPI application startup event triggered.")
+    
+    # Log local tv-logos repository status
+    tv_logos_path = os.getenv("TV_LOGOS_REPO_PATH", "").strip()
+    if tv_logos_path:
+        if os.path.exists(tv_logos_path) and os.path.isdir(tv_logos_path):
+            test_file = os.path.join(tv_logos_path, "countries")
+            if os.path.exists(test_file):
+                logger.info(f"✓ Local tv-logos repository is available at: {tv_logos_path}")
+            else:
+                logger.warning(f"⚠ TV_LOGOS_REPO_PATH set to '{tv_logos_path}' but repository structure incomplete (missing 'countries' directory)")
+        else:
+            logger.warning(f"⚠ TV_LOGOS_REPO_PATH set to '{tv_logos_path}' but directory does not exist")
+    else:
+        logger.info("ℹ Local tv-logos repository disabled (TV_LOGOS_REPO_PATH not set)")
+    
     scheduler.start_scheduler()
     try:
         yield
@@ -271,7 +287,7 @@ async def get_image_response(
     secret_str: str,
     tvg_id: str,
     image_processor_func,
-    media_type: str = "image/jpeg"
+    media_type: str = "image/png"
 ) -> Response:
     """
     Common helper function for image endpoints.
@@ -290,7 +306,14 @@ async def get_image_response(
     """
     channel = get_channel_data(secret_str, tvg_id)
     image_url = channel["tvg_logo"]
-    title = channel["tvg_name"]
+    # Use parsed event_title if available (for events), otherwise use tvg_name
+    if channel.get("is_event") and channel.get("event_title"):
+        title = channel["event_title"]
+        # For logos, use just the first line (before newline) to keep it shorter
+        if "\n" in title:
+            title = title.split("\n")[0]
+    else:
+        title = channel["tvg_name"]
 
     processed_image_bytes = await image_processor_func(redis_store, tvg_id, image_url, title)
     if not processed_image_bytes.getvalue():
@@ -511,8 +534,8 @@ async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_d
         "description": ADDON_DESCRIPTION,
         "logo": f"{HOST_URL}/static/logo.png",
         "behaviorHints": {
-            "configurable": true,
-            "configurationRequired": false
+            "configurable": True,
+            "configurationRequired": False
         },
         "resources": [
             "catalog",
@@ -572,7 +595,14 @@ async def get_icon_image(secret_str: str, tvg_id: str, user_data: UserData = Dep
     else:
         channel = get_channel_data(secret_str, tvg_id)
         image_url = channel["tvg_logo"]
-        channel_name = channel["tvg_name"]
+        # Use parsed event_title if available (for events), otherwise use tvg_name
+        if channel.get("is_event") and channel.get("event_title"):
+            channel_name = channel["event_title"]
+            # For icons, use just the first line (before newline) to keep it shorter
+            if "\n" in channel_name:
+                channel_name = channel_name.split("\n")[0]
+        else:
+            channel_name = channel["tvg_name"]
         processed_image_bytes = await get_icon(redis_store, tvg_id, image_url, channel_name)
 
     if not processed_image_bytes.getvalue():
