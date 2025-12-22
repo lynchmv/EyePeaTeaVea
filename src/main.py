@@ -30,8 +30,8 @@ from .redis_store import RedisStore, RedisConnectionError
 from .models import UserData, ConfigureRequest, UpdateConfigureRequest
 from .utils import generate_secret_str, hash_secret_str, validate_secret_str, hash_password, validate_url
 from .scheduler import Scheduler
-from .image_processor import get_poster, get_background, get_logo, get_icon, close_http_client
-from .catalog_utils import filter_channels, create_meta
+from .image_processor import get_poster, get_background, get_logo, get_icon, close_http_client, GENERIC_PLACEHOLDER_URL
+from .catalog_utils import filter_channels, create_meta, create_empty_meta
 
 load_dotenv()
 
@@ -304,18 +304,25 @@ async def get_image_response(
     Raises:
         HTTPException: If channel not found or image processing fails
     """
-    channel = get_channel_data(secret_str, tvg_id)
-    image_url = channel["tvg_logo"]
-    # Use parsed event_title if available (for events), otherwise use tvg_name
-    if channel.get("is_event") and channel.get("event_title"):
-        title = channel["event_title"]
-        # For logos, use just the first line (before newline) to keep it shorter
-        if "\n" in title:
-            title = title.split("\n")[0]
+    # Handle empty placeholder images
+    if tvg_id == "empty_placeholder":
+        # Generate placeholder image with appropriate title based on context
+        # We'll use a generic message since we don't know the type here
+        title = "No Content Available"
+        processed_image_bytes = await image_processor_func(redis_store, tvg_id, GENERIC_PLACEHOLDER_URL, title)
     else:
-        title = channel["tvg_name"]
+        channel = get_channel_data(secret_str, tvg_id)
+        image_url = channel["tvg_logo"]
+        # Use parsed event_title if available (for events), otherwise use tvg_name
+        if channel.get("is_event") and channel.get("event_title"):
+            title = channel["event_title"]
+            # For logos, use just the first line (before newline) to keep it shorter
+            if "\n" in title:
+                title = title.split("\n")[0]
+        else:
+            title = channel["tvg_name"]
 
-    processed_image_bytes = await image_processor_func(redis_store, tvg_id, image_url, title)
+        processed_image_bytes = await image_processor_func(redis_store, tvg_id, image_url, title)
     if not processed_image_bytes.getvalue():
         raise HTTPException(status_code=500, detail=f"Image processing failed for tvg_id: {tvg_id}")
 
@@ -650,9 +657,16 @@ async def get_catalog(
     if (type == "tv" and id == "iptv_tv") or (type == "events" and id == "iptv_sports_events"):
         channels_data = redis_store.get_all_channels(secret_str)
         if not channels_data:
-            return {"metas": []}
+            # Return a dummy item indicating no channels/events available
+            empty_meta = create_empty_meta(type, secret_str, ADDON_ID_PREFIX, HOST_URL)
+            return {"metas": [empty_meta]}
 
         filtered_channels = filter_channels(channels_data, type, extra_name, extra_value)
+
+        if not filtered_channels:
+            # Return a dummy item indicating no filtered results
+            empty_meta = create_empty_meta(type, secret_str, ADDON_ID_PREFIX, HOST_URL)
+            return {"metas": [empty_meta]}
 
         metas = [create_meta(channel, secret_str, ADDON_ID_PREFIX, HOST_URL) for channel in filtered_channels]
 

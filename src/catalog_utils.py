@@ -165,3 +165,46 @@ def create_meta(
         "description": description,
         "genres": genres,
     }
+
+
+def create_empty_meta(
+    channel_type: str,
+    secret_str: str,
+    addon_id_prefix: str,
+    host_url: str
+) -> dict[str, Any]:
+    """
+    Create a dummy metadata object to display when there are no channels/events.
+    
+    Args:
+        channel_type: Type of catalog ("tv" or "events")
+        secret_str: User's secret string for URL generation
+        addon_id_prefix: Prefix for generating unique IDs
+        host_url: Base URL for generating image URLs
+        
+    Returns:
+        Dictionary containing a dummy Stremio metadata object
+    """
+    if channel_type == "events":
+        name = "No Sports Events Available"
+        description = "There are currently no sports events scheduled. Check back later for upcoming events."
+        meta_id = f"{addon_id_prefix}_empty_events"
+    else:
+        name = "No Channels Available"
+        description = "There are currently no channels available. Please check your M3U playlist configuration."
+        meta_id = f"{addon_id_prefix}_empty_channels"
+    
+    # Use a special tvg_id for the empty placeholder
+    empty_tvg_id = "empty_placeholder"
+    
+    return {
+        "id": meta_id,
+        "type": channel_type,
+        "name": name,
+        "poster": f"{host_url}/{secret_str}/poster/{empty_tvg_id}.png",
+        "posterShape": "portrait",
+        "background": f"{host_url}/{secret_str}/background/{empty_tvg_id}.png",
+        "logo": f"{host_url}/{secret_str}/logo/{empty_tvg_id}.png",
+        "description": description,
+        "genres": ["No Content"],
+    }
