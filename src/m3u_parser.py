@@ -160,6 +160,37 @@ class M3UParser:
             except requests.exceptions.RequestException as e:
                 logger.error(f"Error fetching M3U from {self.m3u_source}: {e}")
                 return ""
+    
+    def extract_epg_urls(self) -> list[str]:
+        """
+        Extract EPG URLs from M3U file.
+        
+        Looks for url-tvg attribute in #EXTM3U header and per-channel.
+        Returns list of unique EPG URLs found.
+        """
+        content = self._get_m3u_content()
+        if not content:
+            return []
+        
+        epg_urls = set()
+        lines = content.splitlines()
+        
+        # Check #EXTM3U header for url-tvg
+        for line in lines:
+            if line.startswith("#EXTM3U"):
+                # Look for url-tvg in the header
+                if "url-tvg" in line:
+                    import re
+                    match = re.search(r'url-tvg="([^"]+)"', line)
+                    if match:
+                        epg_urls.add(match.group(1))
+                break
+        
+        # Also check per-channel url-tvg (though less common)
+        # This is already extracted in parse() method, but we'll collect unique ones here too
+        # The parse() method stores url_tvg per channel, so we can extract from parsed channels
+        
+        return list(epg_urls)
 
     def _preprocess_m3u_content(self, content: str) -> str:
         """

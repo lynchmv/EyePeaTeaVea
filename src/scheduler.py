@@ -13,6 +13,7 @@ from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
 
 from .m3u_parser import M3UParser
+from .epg_parser import EPGParser
 from .redis_store import RedisStore, RedisConnectionError
 from .models import UserData
 from .utils import validate_cron_expression
@@ -91,8 +92,100 @@ class Scheduler:
         else:
             logger.warning(f"No channels were parsed for secret_str: {secret_str[:8]}...")
         
+        # Fetch and store EPG data if available
+        self._fetch_and_store_epg(secret_str, user_data, all_channels_list)
+        
         if errors:
             logger.warning(f"Encountered {len(errors)} errors during M3U fetch for secret_str: {secret_str[:8]}...")
+    
+    def _fetch_and_store_epg(self, secret_str: str, user_data: UserData, channels_list: list[dict]) -> None:
+        """
+        Fetch EPG data from M3U sources and store in Redis.
+        
+        Extracts EPG URLs from M3U files and parses XMLTV EPG data.
+        Maps EPG programs to channels using tvg-id matching.
+        
+        Args:
+            secret_str: User's unique secret string
+            user_data: UserData containing M3U sources
+            channels_list: List of parsed channels (for tvg-id mapping)
+        """
+        epg_urls = set()
+        
+        # Collect EPG URLs from all M3U sources
+        for source in user_data.m3u_sources:
+            try:
+                m3u_parser = M3UParser(source)
+                # Extract EPG URLs from M3U header
+                header_epg_urls = m3u_parser.extract_epg_urls()
+                epg_urls.update(header_epg_urls)
+                
+                # Also collect per-channel url_tvg values
+                for channel in channels_list:
+                    url_tvg = channel.get("url_tvg", "")
+                    if url_tvg:
+                        epg_urls.add(url_tvg)
+            except Exception as e:
+                logger.debug(f"Could not extract EPG URLs from {source}: {e}")
+                continue
+        
+        if not epg_urls:
+            logger.debug(f"No EPG URLs found for secret_str: {secret_str[:8]}...")
+            return
+        
+        # Create mapping of tvg-id to channel for matching
+        tvg_id_map = {ch.get("tvg_id"): ch for ch in channels_list}
+        
+        # Parse EPG data from all URLs and merge
+        all_epg_data = {}
+        
+        for epg_url in epg_urls:
+            try:
+                logger.info(f"Fetching EPG from {epg_url} for secret_str: {secret_str[:8]}...")
+                epg_parser = EPGParser(epg_url)
+                epg_data = epg_parser.parse()
+                
+                # Map EPG channel IDs to M3U tvg-ids
+                # Try to match by exact tvg-id first, then by channel name
+                for epg_channel_id, programs in epg_data.items():
+                    # Try to find matching channel
+                    matched_tvg_id = None
+                    
+                    # First try exact match with tvg-id
+                    if epg_channel_id in tvg_id_map:
+                        matched_tvg_id = epg_channel_id
+                    else:
+                        # Try matching by channel name (case-insensitive)
+                        epg_channel_name = epg_channel_id.lower()
+                        for tvg_id, channel in tvg_id_map.items():
+                            channel_name = channel.get("tvg_name", "").lower()
+                            if epg_channel_name == channel_name or epg_channel_name in channel_name:
+                                matched_tvg_id = tvg_id
+                                break
+                    
+                    if matched_tvg_id:
+                        # Merge programs for this channel
+                        if matched_tvg_id not in all_epg_data:
+                            all_epg_data[matched_tvg_id] = []
+                        all_epg_data[matched_tvg_id].extend(programs)
+                        # Sort by start time
+                        all_epg_data[matched_tvg_id].sort(key=lambda x: x["start"])
+                    else:
+                        logger.debug(f"Could not match EPG channel '{epg_channel_id}' to any M3U channel")
+                
+                logger.info(f"Parsed EPG from {epg_url}: {len(epg_data)} channels, {sum(len(progs) for progs in epg_data.values())} programs")
+                
+            except Exception as e:
+                logger.warning(f"Error fetching/parsing EPG from {epg_url}: {e}")
+                continue
+        
+        # Store merged EPG data
+        if all_epg_data:
+            try:
+                self.redis_store.store_epg_data(secret_str, all_epg_data)
+                logger.info(f"Stored EPG data for {len(all_epg_data)} channels for secret_str: {secret_str[:8]}...")
+            except RedisConnectionError as e:
+                logger.error(f"Failed to store EPG data for {secret_str[:8]}...: {e}")
 
     def _scheduled_fetch_wrapper(self, secret_str: str) -> None:
         """

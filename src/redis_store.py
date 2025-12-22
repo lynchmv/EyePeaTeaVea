@@ -424,6 +424,60 @@ class RedisStore:
         except RedisConnectionError as e:
             logger.error(f"Cannot get processed image {cache_key}: {e}")
             return None
+    
+    def store_epg_data(self, secret_str: str, epg_data: dict) -> None:
+        """
+        Store EPG program data for a user.
+        
+        Args:
+            secret_str: User's unique secret string
+            epg_data: Dictionary mapping channel_id to list of programs
+        """
+        try:
+            self._ensure_connection()
+            key = f"epg:{secret_str}"
+            # Store as JSON, expire after 7 days (EPG data is typically refreshed daily)
+            self.redis_client.set(key, json.dumps(epg_data), ex=60 * 60 * 24 * 7)
+            logger.info(f"Stored EPG data for {secret_str[:8]}... ({len(epg_data)} channels)")
+        except RedisConnectionError as e:
+            logger.error(f"Cannot store EPG data for {secret_str[:8]}...: {e}")
+            raise
+    
+    def get_epg_data(self, secret_str: str) -> dict | None:
+        """
+        Retrieve EPG program data for a user.
+        
+        Args:
+            secret_str: User's unique secret string
+            
+        Returns:
+            Dictionary mapping channel_id to list of programs, or None if not found
+        """
+        try:
+            self._ensure_connection()
+            epg_json = self.redis_client.get(f"epg:{secret_str}")
+            if epg_json:
+                return json.loads(epg_json)
+            return None
+        except (RedisConnectionError, json.JSONDecodeError) as e:
+            logger.error(f"Cannot get EPG data for {secret_str[:8]}...: {e}")
+            return None
+    
+    def get_channel_programs(self, secret_str: str, channel_id: str) -> list[dict] | None:
+        """
+        Get programs for a specific channel.
+        
+        Args:
+            secret_str: User's unique secret string
+            channel_id: Channel identifier (tvg-id)
+            
+        Returns:
+            List of program dictionaries, or None if not found
+        """
+        epg_data = self.get_epg_data(secret_str)
+        if epg_data and channel_id in epg_data:
+            return epg_data[channel_id]
+        return None
 
 
 if __name__ == "__main__":

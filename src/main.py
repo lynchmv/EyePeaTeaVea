@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from datetime import datetime, timedelta
+import pytz
 from dotenv import load_dotenv
 from urllib.parse import urljoin
 
@@ -796,7 +797,93 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
                 channel = json.loads(channel_json)
                 if not channel.get("is_event"):
                     meta = create_meta(channel, secret_str, ADDON_ID_PREFIX, HOST_URL)
-                    meta.update({"runtime": "", "releaseInfo": "", "links": []})
+                    
+                    # Enhance with EPG program information if available
+                    programs = redis_store.get_channel_programs(secret_str, tvg_id)
+                    if programs:
+                        now = datetime.now(pytz.UTC)
+                        current_program = None
+                        upcoming_programs = []
+                        
+                        for program in programs:
+                            # Parse ISO format datetime strings back to datetime objects
+                            try:
+                                start_str = program["start"]
+                                stop_str = program.get("stop")
+                                
+                                if isinstance(start_str, str):
+                                    start = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
+                                else:
+                                    start = start_str
+                                
+                                if stop_str and isinstance(stop_str, str):
+                                    stop = datetime.fromisoformat(stop_str.replace('Z', '+00:00'))
+                                elif stop_str:
+                                    stop = stop_str
+                                else:
+                                    stop = None
+                                
+                                # Ensure timezone-aware
+                                if start.tzinfo is None:
+                                    start = pytz.UTC.localize(start)
+                                if stop and stop.tzinfo is None:
+                                    stop = pytz.UTC.localize(stop)
+                                
+                                # Find current program
+                                if start <= now and (not stop or stop >= now):
+                                    current_program = program
+                                    current_program["_start_dt"] = start
+                                    current_program["_stop_dt"] = stop
+                                # Find upcoming programs (next 3)
+                                elif start > now and len(upcoming_programs) < 3:
+                                    program["_start_dt"] = start
+                                    program["_stop_dt"] = stop
+                                    upcoming_programs.append(program)
+                            except (ValueError, KeyError) as e:
+                                logger.debug(f"Error parsing EPG program datetime: {e}")
+                                continue
+                        
+                        # Build description with EPG info
+                        description_parts = [meta["description"]]
+                        
+                        if current_program:
+                            start_dt = current_program.get("_start_dt")
+                            if start_dt:
+                                start_time = start_dt.strftime("%I:%M %p")
+                            else:
+                                start_time = ""
+                            desc_text = current_program.get("desc", "")
+                            if desc_text:
+                                description_parts.append(f"\n\nNow: {current_program['title']} ({start_time})")
+                                description_parts.append(f"{desc_text}")
+                            else:
+                                description_parts.append(f"\n\nNow: {current_program['title']} ({start_time})")
+                        
+                        if upcoming_programs:
+                            description_parts.append("\n\nUpcoming:")
+                            for prog in upcoming_programs:
+                                start_dt = prog.get("_start_dt")
+                                if start_dt:
+                                    start_time = start_dt.strftime("%I:%M %p")
+                                else:
+                                    start_time = ""
+                                description_parts.append(f"• {prog['title']} ({start_time})")
+                        
+                        meta["description"] = "\n".join(description_parts)
+                        
+                        # Set releaseInfo to current program if available
+                        if current_program:
+                            meta["releaseInfo"] = f"Now: {current_program['title']}"
+                        elif upcoming_programs:
+                            next_start_dt = upcoming_programs[0].get("_start_dt")
+                            if next_start_dt:
+                                next_start = next_start_dt.strftime("%I:%M %p")
+                            else:
+                                next_start = ""
+                            meta["releaseInfo"] = f"Next: {upcoming_programs[0]['title']} at {next_start}"
+                    else:
+                        meta.update({"runtime": "", "releaseInfo": "", "links": []})
+                    
                     return {"meta": meta}
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse channel JSON for tvg_id {tvg_id} in get_meta: {e}")
