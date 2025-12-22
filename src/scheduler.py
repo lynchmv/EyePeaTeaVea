@@ -78,6 +78,12 @@ class Scheduler:
         if all_channels_list:
             try:
                 self.redis_store.store_channels(secret_str, all_channels_list)
+                # Invalidate manifest cache when channels are updated
+                try:
+                    self.redis_store.redis_client.delete(f"manifest:{secret_str}")
+                except Exception:
+                    # Non-critical, log but don't fail
+                    logger.debug(f"Could not invalidate manifest cache for {secret_str[:8]}...")
                 logger.info(f"Stored {len(all_channels_list)} channels for secret_str: {secret_str[:8]}...")
             except RedisConnectionError as e:
                 logger.error(f"Failed to store channels for {secret_str[:8]}...: {e}")

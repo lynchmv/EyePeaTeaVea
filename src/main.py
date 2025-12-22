@@ -132,7 +132,14 @@ async def lifespan(app: FastAPI):
         await close_http_client()  # Clean up HTTP client connections
         logger.info("FastAPI application shutdown event triggered.")
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    title=ADDON_NAME,
+    description=ADDON_DESCRIPTION,
+    version=ADDON_VERSION,
+    lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -253,11 +260,17 @@ async def get_user_data_dependency(secret_str: str) -> UserData:
     try:
         user_data = redis_store.get_user_data(secret_str)
         if not user_data:
-            raise HTTPException(status_code=404, detail=f"User configuration not found for secret_str: {secret_str}")
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Configuration not found. Please check your secret_str or configure a new addon at {HOST_URL}/configure"
+            )
         return user_data
     except RedisConnectionError as e:
         logger.error(f"Redis connection error while fetching user data: {e}")
-        raise HTTPException(status_code=503, detail="Service temporarily unavailable: Redis connection failed")
+        raise HTTPException(
+            status_code=503, 
+            detail="Service temporarily unavailable: Database connection failed. Please try again in a few moments."
+        )
 
 def get_channel_data(secret_str: str, tvg_id: str) -> dict:
     """
@@ -275,7 +288,10 @@ def get_channel_data(secret_str: str, tvg_id: str) -> dict:
     """
     channel_json = redis_store.get_channel(secret_str, tvg_id)
     if not channel_json:
-        raise HTTPException(status_code=404, detail=f"Channel with tvg_id: {tvg_id} not found.")
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Channel not found. The channel may have been removed or the playlist may need to be refreshed. Try updating your configuration at {HOST_URL}/{secret_str}/configure"
+        )
 
     try:
         return json.loads(channel_json)
@@ -324,7 +340,10 @@ async def get_image_response(
 
         processed_image_bytes = await image_processor_func(redis_store, tvg_id, image_url, title)
     if not processed_image_bytes.getvalue():
-        raise HTTPException(status_code=500, detail=f"Image processing failed for tvg_id: {tvg_id}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to generate image for this channel. This may be a temporary issue - please try again later."
+        )
 
     return Response(content=processed_image_bytes.getvalue(), media_type=media_type)
 
@@ -360,9 +379,10 @@ async def health_check():
 
     Returns detailed health status including:
     - Overall service status
-    - Redis connectivity
+    - Redis connectivity and metrics
     - Configuration status
     - Service metadata
+    - User and channel statistics
     """
     health_status = {
         "status": "healthy",
@@ -379,10 +399,25 @@ async def health_check():
             # Try a simple operation to verify Redis is actually working
             try:
                 redis_store.redis_client.ping()
+                
+                # Get some metrics
+                try:
+                    total_users = len(redis_store.get_all_secret_strs())
+                    # Count total channels (approximate - count keys)
+                    channel_keys = list(redis_store.redis_client.scan_iter(match="channel:*"))
+                    total_channels = len(channel_keys)
+                except Exception:
+                    total_users = None
+                    total_channels = None
+                
                 health_status["checks"]["redis"] = {
                     "status": "healthy",
                     "connected": True,
-                    "url": REDIS_URL.split("@")[-1] if "@" in REDIS_URL else REDIS_URL  # Hide credentials
+                    "url": REDIS_URL.split("@")[-1] if "@" in REDIS_URL else REDIS_URL,  # Hide credentials
+                    "metrics": {
+                        "total_users": total_users,
+                        "total_channels": total_channels
+                    }
                 }
             except Exception as e:
                 health_status["checks"]["redis"] = {
@@ -449,6 +484,9 @@ async def configure_addon(
             addon_password=hashed_password
         )
         redis_store.store_user_data(secret_str, user_data)
+        
+        # Invalidate manifest cache when configuration changes
+        redis_store.redis_client.delete(f"manifest:{secret_str}")
 
         logger.info(f"Triggering immediate M3U fetch for secret_str: {secret_str[:8]}...")
         scheduler.trigger_m3u_fetch_for_user(secret_str, user_data)
@@ -460,7 +498,10 @@ async def configure_addon(
         return {"secret_str": secret_str, "message": "Configuration saved successfully. Use this secret_str in your addon URL."}
     except RedisConnectionError as e:
         logger.error(f"Redis connection error during configuration: {e}")
-        raise HTTPException(status_code=503, detail="Service temporarily unavailable: Redis connection failed. Please try again later.")
+        raise HTTPException(
+            status_code=503, 
+            detail="Service temporarily unavailable: Database connection failed. Please try again in a few moments."
+        )
 
 @app.get("/{secret_str}/config")
 async def get_config(secret_str: str, user_data: UserData = Depends(get_user_data_dependency)):
@@ -513,6 +554,9 @@ async def update_configure_addon(
 
         # Store updated configuration
         redis_store.store_user_data(secret_str, updated_user_data)
+        
+        # Invalidate manifest cache when configuration changes
+        redis_store.redis_client.delete(f"manifest:{secret_str}")
 
         logger.info(f"Configuration updated for secret_str: {secret_str[:8]}...")
         logger.info(f"Triggering immediate M3U fetch for secret_str: {secret_str[:8]}...")
@@ -534,11 +578,30 @@ async def update_configure_addon(
         }
     except RedisConnectionError as e:
         logger.error(f"Redis connection error during configuration update: {e}")
-        raise HTTPException(status_code=503, detail="Service temporarily unavailable: Redis connection failed. Please try again later.")
+        raise HTTPException(
+            status_code=503, 
+            detail="Service temporarily unavailable: Database connection failed. Please try again in a few moments."
+        )
 
 @app.get("/{secret_str}/manifest.json")
 async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_data_dependency)):
+    """
+    Get the Stremio manifest for a user's addon configuration.
+    
+    Returns the manifest with available catalogs, genres, and resources.
+    The manifest is cached and automatically invalidated when channels are updated.
+    """
     logger.info(f"Manifest endpoint accessed for secret_str: {secret_str[:8]}...")
+
+    # Check cache first (cache key includes secret_str for per-user caching)
+    cache_key = f"manifest:{secret_str}"
+    cached_manifest = redis_store.get(cache_key)
+    if cached_manifest:
+        try:
+            return json.loads(cached_manifest)
+        except json.JSONDecodeError:
+            # If cached data is corrupted, regenerate
+            logger.warning(f"Cached manifest for {secret_str[:8]}... is corrupted, regenerating")
 
     all_channels = redis_store.get_all_channels(secret_str)
     unique_group_titles = set()
@@ -593,6 +656,10 @@ async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_d
             }
         ]
     }
+    
+    # Cache the manifest for 5 minutes (channels can change, so don't cache too long)
+    redis_store.set(cache_key, json.dumps(manifest).encode(), expiration_time=300)
+    
     return manifest
 
 app.mount("/frontend", StaticFiles(directory="frontend", html=True), name="frontend")
@@ -634,7 +701,10 @@ async def get_icon_image(secret_str: str, tvg_id: str, user_data: UserData = Dep
         processed_image_bytes = await get_icon(redis_store, tvg_id, image_url, channel_name)
 
     if not processed_image_bytes.getvalue():
-        raise HTTPException(status_code=500, detail=f"Image processing failed for tvg_id: {tvg_id}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to generate icon image. This may be a temporary issue - please try again later."
+        )
     return Response(content=processed_image_bytes.getvalue(), media_type="image/png")
 
 @app.get("/{secret_str}/catalog/{type}/{id}.json")
@@ -672,7 +742,10 @@ async def get_catalog(
 
         return {"metas": metas}
 
-    raise HTTPException(status_code=404, detail=f"Catalog with type: {type} and id: {id} not found.")
+    raise HTTPException(
+        status_code=404, 
+        detail=f"Catalog not found. Please check that you're using the correct catalog type and ID from your manifest."
+    )
 
 @app.get("/{secret_str}/meta/{type}/{id}.json")
 async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = Depends(get_user_data_dependency)):
@@ -714,7 +787,10 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse channel JSON for tvg_id {tvg_id} in get_meta: {e}")
                 raise HTTPException(status_code=500, detail=f"Invalid channel data for tvg_id: {tvg_id}")
-    raise HTTPException(status_code=404, detail=f"Meta with type: {type} and id: {id} not found.")
+    raise HTTPException(
+        status_code=404, 
+        detail=f"Content not found. The item may have been removed or expired. Try refreshing your catalog."
+    )
 
 @app.get("/{secret_str}/stream/{type}/{id}.json")
 async def get_stream(secret_str: str, type: str, id: str, user_data: UserData = Depends(get_user_data_dependency)):
@@ -749,4 +825,7 @@ async def get_stream(secret_str: str, type: str, id: str, user_data: UserData = 
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse channel JSON for tvg_id {tvg_id} in get_stream: {e}")
                 raise HTTPException(status_code=500, detail=f"Invalid channel data for tvg_id: {tvg_id}")
-    raise HTTPException(status_code=404, detail=f"Stream with type: {type} and id: {id} not found.")
+    raise HTTPException(
+        status_code=404, 
+        detail=f"Stream not found. The stream may have expired or the channel may no longer be available. Try refreshing your catalog."
+    )
