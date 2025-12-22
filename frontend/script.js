@@ -1,3 +1,33 @@
+// Toast notification helper function
+function showToast(message, type = 'info') {
+    const toast = document.getElementById('toast');
+    const toastMessage = document.getElementById('toast-message');
+    const toastTitle = document.getElementById('toast-title');
+    
+    // Set message
+    toastMessage.textContent = message;
+    
+    // Set title and styling based on type
+    const toastElement = bootstrap.Toast.getOrCreateInstance(toast);
+    toast.className = 'toast';
+    
+    if (type === 'success') {
+        toastTitle.textContent = 'Success';
+        toast.classList.add('text-bg-success');
+    } else if (type === 'error') {
+        toastTitle.textContent = 'Error';
+        toast.classList.add('text-bg-danger');
+    } else if (type === 'warning') {
+        toastTitle.textContent = 'Warning';
+        toast.classList.add('text-bg-warning');
+    } else {
+        toastTitle.textContent = 'Info';
+        toast.classList.add('text-bg-info');
+    }
+    
+    toastElement.show();
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     // Pre-fill the host_url with the current location
     const hostUrlInput = document.getElementById('host_url');
@@ -62,7 +92,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadConfigBtn.addEventListener('click', async () => {
         const secretStr = secretStrInput.value.trim();
         if (!secretStr) {
-            alert('Please enter your secret_str');
+            showToast('Please enter your secret_str', 'warning');
             return;
         }
 
@@ -93,13 +123,13 @@ document.addEventListener('DOMContentLoaded', () => {
             // Password field should remain empty for security (has_password is just a boolean)
             document.getElementById('addon_password').value = '';
 
-            // Only show alert if not auto-loading (to avoid annoying popup on page load)
+            // Only show toast if not auto-loading (to avoid annoying popup on page load)
             const isAutoLoad = window.location.pathname.match(/^\/([^\/]+)\/configure$/);
             if (!isAutoLoad) {
-                alert('Configuration loaded successfully! You can now update the fields.');
+                showToast('Configuration loaded successfully! You can now update the fields.', 'success');
             }
         } catch (error) {
-            alert('Error: ' + error.message);
+            showToast('Error: ' + error.message, 'error');
         } finally {
             loadConfigBtn.disabled = false;
             loadConfigBtn.textContent = 'Load Configuration';
@@ -123,7 +153,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     window.location.href = manifestUrl;
                 } else {
                     displayFallbackUrl(manifestUrl);
-                    alert('Configuration updated successfully!');
+                    showToast('Configuration updated successfully!', 'success');
                 }
             }
             spinner.style.display = 'none';
@@ -141,7 +171,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             } catch (error) {
                 displayFallbackUrl(manifestUrl);
-                alert('Unable to use Share API. URL is ready to be copied manually.');
+                showToast('Unable to use Share API. URL is ready to be copied manually.', 'info');
             }
         }
     });
@@ -207,7 +237,7 @@ async function getManifestUrl(isRedirect = false) {
         return manifestUrl;
 
     } catch (error) {
-        alert('Error: ' + error.message);
+        showToast('Error: ' + error.message, 'error');
         return null;
     }
 }
@@ -232,7 +262,7 @@ function generateQRCode(url) {
 async function updateConfiguration() {
     const secretStr = document.getElementById('secret_str').value.trim();
     if (!secretStr) {
-        alert('Please enter your secret_str');
+        showToast('Please enter your secret_str', 'warning');
         return null;
     }
 
@@ -271,7 +301,7 @@ async function updateConfiguration() {
         return manifestUrl;
 
     } catch (error) {
-        alert('Error: ' + error.message);
+        showToast('Error: ' + error.message, 'error');
         return null;
     }
 }
@@ -288,8 +318,8 @@ function clearForm() {
 function copyToClipboard(text) {
     try {
         navigator.clipboard.writeText(text);
-        alert('Manifest URL copied to clipboard.');
+        showToast('Manifest URL copied to clipboard!', 'success');
     } catch (error) {
-        alert('Unable to access clipboard. URL is ready to be copied manually.');
+        showToast('Unable to access clipboard. URL is ready to be copied manually.', 'warning');
     }
 }

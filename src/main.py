@@ -21,6 +21,7 @@ import hashlib
 from fastapi import FastAPI, HTTPException, Response, Depends, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
@@ -162,6 +163,9 @@ else:
     # Stremio clients may come from various origins and may not send a web-page origin
     cors_allowed_origins = ["*"]
     logger.info("CORS using default: allow all origins (*) - recommended for Stremio addon compatibility")
+
+# Add compression middleware for better performance
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.add_middleware(
     CORSMiddleware,
@@ -472,7 +476,12 @@ async def health_check():
 async def configure_addon(
     request: ConfigureRequest
 ):
-    """Configure a new addon instance. Rate limited to 10 requests per hour per IP."""
+    """
+    Configure a new addon instance. Rate limited to 10 requests per hour per IP.
+    
+    Creates a new Stremio addon configuration with M3U playlist sources and scheduling.
+    Returns a secret_str that should be used in the addon URL.
+    """
     try:
         secret_str = generate_secret_str()
         # Hash password before storage if provided
@@ -508,6 +517,7 @@ async def get_config(secret_str: str, user_data: UserData = Depends(get_user_dat
     """
     Get the current configuration for a user (read-only, for UI purposes).
 
+    Returns the user's configuration including M3U sources, schedule, and host URL.
     Note: Password is never returned for security reasons. Use a boolean
     to indicate if a password is set.
     """
@@ -525,7 +535,12 @@ async def update_configure_addon(
     request: UpdateConfigureRequest,
     user_data: UserData = Depends(get_user_data_dependency)
 ):
-    """Update an existing user configuration. Only provided fields will be updated."""
+    """
+    Update an existing user configuration. Only provided fields will be updated.
+    
+    Allows partial updates - only fields provided in the request will be changed.
+    Empty string for addon_password removes the password.
+    """
     try:
         logger.info(f"Update configuration requested for secret_str: {secret_str[:8]}...")
 
