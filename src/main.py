@@ -799,7 +799,22 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
                     meta = create_meta(channel, secret_str, ADDON_ID_PREFIX, HOST_URL)
                     
                     # Enhance with EPG program information if available
+                    # Try multiple lookup strategies in case EPG was stored with different key
                     programs = redis_store.get_channel_programs(secret_str, tvg_id)
+                    
+                    # If not found, try looking up by channel name as fallback
+                    if not programs:
+                        channel_name = channel.get("tvg_name", "").lower()
+                        epg_data = redis_store.get_epg_data(secret_str)
+                        if epg_data:
+                            # Try to find matching EPG channel by name
+                            for epg_channel_id, epg_programs in epg_data.items():
+                                epg_channel_name = epg_channel_id.lower().replace('.', ' ').replace('_', ' ')
+                                if epg_channel_name == channel_name or channel_name in epg_channel_name or epg_channel_name in channel_name:
+                                    programs = epg_programs
+                                    logger.debug(f"Found EPG programs for '{tvg_id}' via name match with EPG channel '{epg_channel_id}'")
+                                    break
+                    
                     if programs:
                         now = datetime.now(pytz.UTC)
                         current_program = None

@@ -146,21 +146,35 @@ class Scheduler:
                 epg_data = epg_parser.parse()
                 
                 # Map EPG channel IDs to M3U tvg-ids
-                # Try to match by exact tvg-id first, then by channel name
+                # Try multiple matching strategies:
+                # 1. Exact match with tvg-id
+                # 2. Match by tvg-name (case-insensitive, partial match)
+                # 3. Match EPG channel ID to tvg-id (normalized comparison)
                 for epg_channel_id, programs in epg_data.items():
                     # Try to find matching channel
                     matched_tvg_id = None
                     
-                    # First try exact match with tvg-id
+                    # Strategy 1: Exact match with tvg-id
                     if epg_channel_id in tvg_id_map:
                         matched_tvg_id = epg_channel_id
+                        logger.debug(f"Matched EPG channel '{epg_channel_id}' to M3U tvg-id '{matched_tvg_id}' (exact match)")
                     else:
-                        # Try matching by channel name (case-insensitive)
-                        epg_channel_name = epg_channel_id.lower()
+                        # Strategy 2: Try matching by channel name (case-insensitive)
+                        epg_channel_name = epg_channel_id.lower().replace('.', ' ').replace('_', ' ')
                         for tvg_id, channel in tvg_id_map.items():
                             channel_name = channel.get("tvg_name", "").lower()
-                            if epg_channel_name == channel_name or epg_channel_name in channel_name:
+                            tvg_id_normalized = tvg_id.lower().replace('.', ' ').replace('_', ' ')
+                            
+                            # Check if EPG channel name matches tvg-name
+                            if epg_channel_name == channel_name or epg_channel_name in channel_name or channel_name in epg_channel_name:
                                 matched_tvg_id = tvg_id
+                                logger.debug(f"Matched EPG channel '{epg_channel_id}' to M3U tvg-id '{matched_tvg_id}' (by name: '{channel.get('tvg_name')}')")
+                                break
+                            
+                            # Strategy 3: Normalized comparison of EPG channel ID to tvg-id
+                            if epg_channel_name == tvg_id_normalized or epg_channel_name in tvg_id_normalized or tvg_id_normalized in epg_channel_name:
+                                matched_tvg_id = tvg_id
+                                logger.debug(f"Matched EPG channel '{epg_channel_id}' to M3U tvg-id '{matched_tvg_id}' (normalized match)")
                                 break
                     
                     if matched_tvg_id:
@@ -170,8 +184,9 @@ class Scheduler:
                         all_epg_data[matched_tvg_id].extend(programs)
                         # Sort by start time
                         all_epg_data[matched_tvg_id].sort(key=lambda x: x["start"])
+                        logger.debug(f"Added {len(programs)} programs for channel '{matched_tvg_id}'")
                     else:
-                        logger.debug(f"Could not match EPG channel '{epg_channel_id}' to any M3U channel")
+                        logger.warning(f"Could not match EPG channel '{epg_channel_id}' to any M3U channel. Available tvg-ids: {list(tvg_id_map.keys())[:10]}...")
                 
                 logger.info(f"Parsed EPG from {epg_url}: {len(epg_data)} channels, {sum(len(progs) for progs in epg_data.values())} programs")
                 
