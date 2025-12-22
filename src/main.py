@@ -325,6 +325,27 @@ async def get_image_response(
 async def root():
     return FileResponse('frontend/index.html')
 
+@app.get("/{secret_str}/configure")
+async def configure_page(secret_str: str):
+    """
+    Serve the configuration page with the secret_str pre-filled and in update mode.
+    This allows users to access /{secret_str}/configure directly to update their configuration.
+    """
+    # Validate that the secret_str exists
+    try:
+        validate_secret_str(secret_str)
+        user_data = redis_store.get_user_data(secret_str)
+        if not user_data:
+            raise HTTPException(status_code=404, detail=f"Configuration not found for secret_str: {secret_str}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid secret_str: {e}")
+    except RedisConnectionError as e:
+        logger.error(f"Redis connection error while fetching user data: {e}")
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable: Redis connection failed")
+    
+    # Return the frontend page - the frontend will detect the secret_str in the URL and auto-load
+    return FileResponse('frontend/index.html')
+
 @app.get("/health")
 async def health_check():
     """

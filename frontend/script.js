@@ -20,6 +20,29 @@ document.addEventListener('DOMContentLoaded', () => {
     const submitBtnText = document.getElementById('submit-btn-text');
     const loadConfigBtn = document.getElementById('load-config-btn');
 
+    // Check if we're on a /{secret_str}/configure URL and auto-load configuration
+    // Do this AFTER event listeners are set up
+    const pathMatch = window.location.pathname.match(/^\/([^\/]+)\/configure$/);
+    if (pathMatch) {
+        const secretStr = pathMatch[1];
+        // Wait a bit for all event listeners to be set up, then switch to update mode
+        setTimeout(() => {
+            // Switch to update mode
+            modeUpdate.checked = true;
+            modeUpdate.dispatchEvent(new Event('change'));
+            
+            // Set the secret_str after mode switch completes
+            setTimeout(() => {
+                secretStrInput.value = secretStr;
+                
+                // Auto-load the configuration
+                if (loadConfigBtn) {
+                    loadConfigBtn.click();
+                }
+            }, 100);
+        }, 200);
+    }
+
     modeNew.addEventListener('change', () => {
         if (modeNew.checked) {
             secretStrGroup.style.display = 'none';
@@ -67,9 +90,14 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('m3u_sources').value = config.m3u_sources.join('\n');
             document.getElementById('parser_schedule_crontab').value = config.parser_schedule_crontab;
             document.getElementById('host_url').value = config.host_url;
-            document.getElementById('addon_password').value = config.addon_password || '';
+            // Password field should remain empty for security (has_password is just a boolean)
+            document.getElementById('addon_password').value = '';
 
-            alert('Configuration loaded successfully! You can now update the fields.');
+            // Only show alert if not auto-loading (to avoid annoying popup on page load)
+            const isAutoLoad = window.location.pathname.match(/^\/([^\/]+)\/configure$/);
+            if (!isAutoLoad) {
+                alert('Configuration loaded successfully! You can now update the fields.');
+            }
         } catch (error) {
             alert('Error: ' + error.message);
         } finally {
