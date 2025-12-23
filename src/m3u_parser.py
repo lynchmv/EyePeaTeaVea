@@ -217,11 +217,42 @@ class M3UParser:
 
     def parse(self) -> list[dict]:
         """Parses M3U content using ipytv and extracts channel information."""
-        content = self._get_m3u_content()
-        if not content:
+        raw_content = self._get_m3u_content()
+        if not raw_content:
             return []
 
-        content = self._preprocess_m3u_content(content)
+        # Parse raw content to extract EXTVLCOPT tags BEFORE preprocessing
+        # (they're not in ipytv's parsed structure)
+        raw_lines = raw_content.splitlines()
+        channel_vlcopts = {}  # Map channel index to VLC options
+        
+        current_channel_idx = -1
+        for i, line in enumerate(raw_lines):
+            line = line.strip()
+            if line.startswith("#EXTINF"):
+                current_channel_idx += 1
+                channel_vlcopts[current_channel_idx] = {}
+            elif line.startswith("#EXTVLCOPT:"):
+                # Parse EXTVLCOPT tags
+                opt_line = line.replace("#EXTVLCOPT:", "").strip()
+                if "=" in opt_line:
+                    key, value = opt_line.split("=", 1)
+                    key = key.strip().lower()
+                    value = value.strip()
+                    
+                    # Map VLC options to HTTP headers
+                    if key == "http-referrer":
+                        if current_channel_idx >= 0:
+                            if "headers" not in channel_vlcopts[current_channel_idx]:
+                                channel_vlcopts[current_channel_idx]["headers"] = {}
+                            channel_vlcopts[current_channel_idx]["headers"]["Referer"] = value
+                    elif key == "http-user-agent":
+                        if current_channel_idx >= 0:
+                            if "headers" not in channel_vlcopts[current_channel_idx]:
+                                channel_vlcopts[current_channel_idx]["headers"] = {}
+                            channel_vlcopts[current_channel_idx]["headers"]["User-Agent"] = value
+
+        content = self._preprocess_m3u_content(raw_content)
 
         # Pre-process content to ensure #EXTM3U is at the beginning
         extm3u_index = content.find("#EXTM3U")
@@ -248,7 +279,7 @@ class M3UParser:
             r"\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?\s*(?:ET|EST|EDT|UTC)?\s*=?\s*", re.IGNORECASE
         )
 
-        for channel_obj in iptv_playlist:
+        for channel_idx, channel_obj in enumerate(iptv_playlist):
             group_title = channel_obj.attributes.get(IPTVAttr.GROUP_TITLE.value, "Other")
             tvg_name = channel_obj.attributes.get(IPTVAttr.TVG_NAME.value, channel_obj.name)
             if not tvg_name:
@@ -328,6 +359,11 @@ class M3UParser:
 
             url_tvg = channel_obj.attributes.get("url-tvg", "")
             stream_url = channel_obj.url
+            
+            # Get VLC options (HTTP headers) for this channel if available
+            stream_headers = None
+            if channel_idx in channel_vlcopts and "headers" in channel_vlcopts[channel_idx]:
+                stream_headers = channel_vlcopts[channel_idx]["headers"]
 
             channel_info = {
                 "group_title": group_title,
@@ -336,6 +372,7 @@ class M3UParser:
                 "tvg_logo": tvg_logo,
                 "url_tvg": url_tvg,
                 "stream_url": stream_url,
+                "stream_headers": stream_headers,  # HTTP headers for stream requests
                 "is_event": is_event,
                 "event_title": event_title,
                 "event_sport": event_sport,

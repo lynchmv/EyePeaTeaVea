@@ -963,11 +963,18 @@ async def get_stream(secret_str: str, type: str, id: str, user_data: UserData = 
             try:
                 channel = json.loads(channel_json)
                 name = channel["event_title"] if channel.get("is_event") else channel["tvg_name"]
+                
+                # Build stream object with optional headers
                 stream = {
                     "name": name,
                     "description": f"Live stream for {name}",
                     "url": channel["stream_url"]
                 }
+                
+                # Add HTTP headers if available (from EXTVLCOPT tags)
+                if channel.get("stream_headers"):
+                    stream["headers"] = channel["stream_headers"]
+                
                 return {"streams": [stream]}
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse channel JSON for tvg_id {tvg_id} in get_stream: {e}")
