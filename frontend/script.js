@@ -285,7 +285,9 @@ async function getManifestUrl(isRedirect = false) {
             urlPrefix = "stremio://";
         }
 
-        const manifestUrl = `${urlPrefix}${hostUrl.replace(/^https?:\/\//, '')}/${secret_str}/manifest.json`;
+        // Normalize hostUrl: remove protocol and trailing slashes
+        const normalizedHost = hostUrl.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+        const manifestUrl = `${urlPrefix}${normalizedHost}/${secret_str}/manifest.json`;
         
         const resultDiv = document.getElementById('result');
         const manifestUrlInput = document.getElementById('manifest_url');
@@ -359,7 +361,9 @@ async function updateConfiguration() {
         }
 
         const result = await response.json();
-        const manifestUrl = `${hostUrl.replace(/^https?:\/\//, '')}/${secretStr}/manifest.json`;
+        // Normalize hostUrl: remove protocol and trailing slashes
+        const normalizedHost = hostUrl.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+        const manifestUrl = `${normalizedHost}/${secretStr}/manifest.json`;
         
         return manifestUrl;
 

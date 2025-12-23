@@ -24,6 +24,14 @@ class ConfigureRequest(BaseModel):
     addon_password: str | None = None
     timezone: str | None = None
     
+    @field_validator('host_url', mode='before')
+    @classmethod
+    def normalize_host_url(cls, v):
+        """Normalize host_url by removing trailing slashes."""
+        if isinstance(v, str):
+            return v.rstrip('/')
+        return v
+    
     @field_validator('m3u_sources')
     @classmethod
     def validate_m3u_sources(cls, v: list[str]) -> list[str]:
@@ -64,6 +72,14 @@ class UpdateConfigureRequest(BaseModel):
     host_url: HttpUrl | None = None
     addon_password: str | None = None
     timezone: str | None = None
+    
+    @field_validator('host_url', mode='before')
+    @classmethod
+    def normalize_host_url(cls, v):
+        """Normalize host_url by removing trailing slashes."""
+        if isinstance(v, str):
+            return v.rstrip('/')
+        return v
     
     @field_validator('m3u_sources')
     @classmethod

@@ -486,10 +486,16 @@ async def configure_addon(
         secret_str = generate_secret_str()
         # Hash password before storage if provided
         hashed_password = hash_password(request.addon_password) if request.addon_password else None
+        
+        # Normalize host_url by removing trailing slashes
+        normalized_host_url = str(request.host_url).rstrip('/')
+        from .models import HttpUrl
+        normalized_host_url_obj = HttpUrl(normalized_host_url)
+        
         user_data = UserData(
             m3u_sources=request.m3u_sources,
             parser_schedule_crontab=request.parser_schedule_crontab,
-            host_url=request.host_url,
+            host_url=normalized_host_url_obj,
             addon_password=hashed_password,
             timezone=request.timezone
         )
@@ -562,6 +568,13 @@ async def update_configure_addon(
         else:
             updated_password = user_data.addon_password
 
+        # Normalize host_url by removing trailing slashes
+        if updated_host_url:
+            updated_host_url_str = str(updated_host_url).rstrip('/')
+            # Re-validate the normalized URL
+            from .models import HttpUrl
+            updated_host_url = HttpUrl(updated_host_url_str)
+        
         # Create updated user data
         updated_user_data = UserData(
             m3u_sources=updated_m3u_sources,
