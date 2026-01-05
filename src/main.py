@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse
 from datetime import datetime, timedelta
 import pytz
 from dotenv import load_dotenv
-from urllib.parse import urljoin
+from urllib.parse import urljoin, unquote
 
 from .redis_store import RedisStore, RedisConnectionError
 from .models import UserData, ConfigureRequest, UpdateConfigureRequest
@@ -748,13 +748,37 @@ async def get_catalog(
     user_data: UserData = Depends(get_user_data_dependency),
     extra: str | None = None
 ):
+    # Parse query parameters from extra path
+    # Format: "skip=3&genre=NCAAF" or "genre=NCAAF" or "search=term"
     extra_name = None
     extra_value = None
+    skip = 0
+    
     if extra:
-        parts = extra.split('=', 1)
-        if len(parts) == 2:
-            extra_name = parts[0]
-            extra_value = parts[1]
+        # URL decode the extra parameter (handles %3D for =, %26 for &, etc.)
+        decoded_extra = unquote(extra)
+        
+        # Split by & to handle multiple parameters
+        params = {}
+        for param in decoded_extra.split('&'):
+            if '=' in param:
+                key, value = param.split('=', 1)
+                params[key.strip()] = value.strip()
+        
+        # Extract genre or search filter
+        if 'genre' in params:
+            extra_name = 'genre'
+            extra_value = params['genre']
+        elif 'search' in params:
+            extra_name = 'search'
+            extra_value = params['search']
+        
+        # Extract skip parameter for pagination (optional)
+        if 'skip' in params:
+            try:
+                skip = int(params['skip'])
+            except ValueError:
+                skip = 0
 
     if (type == "tv" and id == "iptv_tv") or (type == "events" and id == "iptv_sports_events"):
         channels_data = redis_store.get_all_channels(secret_str)
@@ -769,6 +793,10 @@ async def get_catalog(
             # Return a dummy item indicating no filtered results
             empty_meta = create_empty_meta(type, secret_str, ADDON_ID_PREFIX, HOST_URL)
             return {"metas": [empty_meta]}
+
+        # Apply pagination if skip is specified
+        if skip > 0:
+            filtered_channels = filtered_channels[skip:]
 
         metas = [create_meta(channel, secret_str, ADDON_ID_PREFIX, HOST_URL) for channel in filtered_channels]
 
