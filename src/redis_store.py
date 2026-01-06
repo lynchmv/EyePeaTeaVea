@@ -8,6 +8,7 @@ Supports per-user channel storage and global image caching.
 import json
 import logging
 import time
+import hashlib
 from datetime import datetime, timedelta
 from typing import Any
 import pytz
@@ -478,6 +479,86 @@ class RedisStore:
         if epg_data and channel_id in epg_data:
             return epg_data[channel_id]
         return None
+    
+    # Admin methods
+    def store_admin_user(self, username: str, admin_user: dict) -> None:
+        """Store admin user data in Redis."""
+        try:
+            self._ensure_connection()
+            key = f"admin_user:{username}"
+            self.redis_client.set(key, json.dumps(admin_user))
+        except RedisConnectionError as e:
+            logger.error(f"Cannot store admin user {username}: {e}")
+            raise
+    
+    def get_admin_user(self, username: str) -> dict | None:
+        """Retrieve admin user data from Redis."""
+        try:
+            self._ensure_connection()
+            admin_json = self.redis_client.get(f"admin_user:{username}")
+            if admin_json:
+                return json.loads(admin_json)
+            return None
+        except (RedisConnectionError, json.JSONDecodeError) as e:
+            logger.error(f"Cannot get admin user {username}: {e}")
+            return None
+    
+    def get_all_admin_users(self) -> list[str]:
+        """Get all admin usernames."""
+        try:
+            self._ensure_connection()
+            usernames = []
+            for key in self.redis_client.scan_iter(match="admin_user:*"):
+                username = key.decode('utf-8').replace("admin_user:", "")
+                usernames.append(username)
+            return usernames
+        except RedisConnectionError as e:
+            logger.error(f"Cannot get admin users: {e}")
+            return []
+    
+    def store_admin_session(self, session_id: str, session_data: dict, expiration_seconds: int = 3600 * 24) -> None:
+        """Store admin session in Redis with expiration."""
+        try:
+            self._ensure_connection()
+            key = f"admin_session:{session_id}"
+            self.redis_client.setex(key, expiration_seconds, json.dumps(session_data))
+        except RedisConnectionError as e:
+            logger.error(f"Cannot store admin session {session_id}: {e}")
+            raise
+    
+    def get_admin_session(self, session_id: str) -> dict | None:
+        """Retrieve admin session from Redis."""
+        try:
+            self._ensure_connection()
+            session_json = self.redis_client.get(f"admin_session:{session_id}")
+            if session_json:
+                return json.loads(session_json)
+            return None
+        except (RedisConnectionError, json.JSONDecodeError) as e:
+            logger.error(f"Cannot get admin session {session_id}: {e}")
+            return None
+    
+    def delete_admin_session(self, session_id: str) -> None:
+        """Delete admin session from Redis."""
+        try:
+            self._ensure_connection()
+            self.redis_client.delete(f"admin_session:{session_id}")
+        except RedisConnectionError as e:
+            logger.error(f"Cannot delete admin session {session_id}: {e}")
+    
+    def store_audit_log(self, log_entry: dict) -> None:
+        """Store audit log entry in Redis (with TTL for automatic cleanup)."""
+        try:
+            self._ensure_connection()
+            # Use timestamp as part of key for chronological ordering
+            timestamp = log_entry.get("timestamp", datetime.now().isoformat())
+            log_id = hashlib.sha256(f"{timestamp}{json.dumps(log_entry)}".encode()).hexdigest()[:16]
+            key = f"audit_log:{timestamp}:{log_id}"
+            # Store for 90 days
+            self.redis_client.setex(key, 60 * 60 * 24 * 90, json.dumps(log_entry))
+        except RedisConnectionError as e:
+            logger.error(f"Cannot store audit log: {e}")
+            # Don't raise - audit logging shouldn't break the app
 
 
 if __name__ == "__main__":

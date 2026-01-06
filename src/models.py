@@ -139,3 +139,57 @@ class Channel(BaseModel):
     url_tvg: str
     stream_url: str
     events: list[Event] = Field(default_factory=list)
+
+# Admin models
+class AdminUser(BaseModel):
+    """Admin user model for authentication and authorization."""
+    username: str
+    password_hash: str
+    role: str = "admin"  # admin, super_admin, viewer
+    created_at: str
+    last_login: str | None = None
+    is_active: bool = True
+
+class AdminLoginRequest(BaseModel):
+    """Request model for admin login."""
+    username: str
+    password: str
+
+class AdminSession(BaseModel):
+    """Admin session model."""
+    session_id: str
+    username: str
+    role: str
+    created_at: str
+    expires_at: str
+    ip_address: str | None = None
+
+class UserSummary(BaseModel):
+    """Summary model for user listing."""
+    secret_str: str
+    created_at: str | None = None
+    channel_count: int = 0
+    event_count: int = 0
+    last_sync: str | None = None
+    status: str = "unknown"  # active, warning, error
+    m3u_source_count: int = 0
+
+class SystemStats(BaseModel):
+    """System statistics model."""
+    total_users: int
+    total_channels: int
+    total_events: int
+    active_scheduler_jobs: int
+    redis_memory_used: int | None = None
+    redis_memory_max: int | None = None
+    cache_hit_rate: float | None = None
+    users_last_24h: int = 0
+    users_last_7d: int = 0
+    users_last_30d: int = 0
+    failed_parses_24h: int = 0
+    average_response_time: float | None = None
+
+class ChangePasswordRequest(BaseModel):
+    """Request model for changing admin password."""
+    old_password: str
+    new_password: str

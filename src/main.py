@@ -34,6 +34,7 @@ from .utils import generate_secret_str, hash_secret_str, validate_secret_str, ha
 from .scheduler import Scheduler
 from .image_processor import get_poster, get_background, get_logo, get_icon, close_http_client, GENERIC_PLACEHOLDER_URL
 from .catalog_utils import filter_channels, create_meta, create_empty_meta
+from .admin import admin_router, set_scheduler
 
 load_dotenv()
 
@@ -100,6 +101,9 @@ def validate_configuration() -> None:
 redis_store = RedisStore(REDIS_URL)
 scheduler = Scheduler()
 
+# Set scheduler instance in admin module so it uses the same instance
+set_scheduler(scheduler)
+
 # Validate configuration at module load time
 try:
     validate_configuration()
@@ -144,6 +148,64 @@ app = FastAPI(
 )
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Include admin router - API routes are registered here
+app.include_router(admin_router)
+
+# Admin frontend page routes - serve HTML for browser navigation
+# These routes check Accept header - if it's JSON (API call), let it 404 so router handles it
+# FastAPI will try these routes first, but if they raise 404, it continues to router
+@app.get("/admin/")
+async def admin_dashboard(request: Request):
+    """Serve admin dashboard HTML or let API route handle it."""
+    if "application/json" in request.headers.get("accept", ""):
+        raise HTTPException(status_code=404)  # Let router handle API calls
+    return FileResponse('admin/index.html')
+
+@app.get("/admin/users")
+async def admin_users_page(request: Request):
+    """Serve admin dashboard HTML or let API route handle it."""
+    if "application/json" in request.headers.get("accept", ""):
+        raise HTTPException(status_code=404)  # Let router handle API calls
+    return FileResponse('admin/index.html')
+
+@app.get("/admin/channels")
+async def admin_channels_page(request: Request):
+    """Serve admin dashboard HTML or let API route handle it."""
+    if "application/json" in request.headers.get("accept", ""):
+        raise HTTPException(status_code=404)  # Let router handle API calls
+    return FileResponse('admin/index.html')
+
+@app.get("/admin/events")
+async def admin_events_page(request: Request):
+    """Serve admin dashboard HTML or let API route handle it."""
+    if "application/json" in request.headers.get("accept", ""):
+        raise HTTPException(status_code=404)  # Let router handle API calls
+    return FileResponse('admin/index.html')
+
+@app.get("/admin/system")
+async def admin_system_page(request: Request):
+    """Serve admin dashboard HTML or let API route handle it."""
+    if "application/json" in request.headers.get("accept", ""):
+        raise HTTPException(status_code=404)  # Let router handle API calls
+    return FileResponse('admin/index.html')
+
+@app.get("/admin/logs")
+async def admin_logs_page(request: Request):
+    """Serve admin dashboard HTML or let API route handle it."""
+    if "application/json" in request.headers.get("accept", ""):
+        raise HTTPException(status_code=404)  # Let router handle API calls
+    return FileResponse('admin/index.html')
+
+@app.get("/admin/settings")
+async def admin_settings_page(request: Request):
+    """Serve admin dashboard HTML or let API route handle it."""
+    if "application/json" in request.headers.get("accept", ""):
+        raise HTTPException(status_code=404)  # Let router handle API calls
+    return FileResponse('admin/index.html')
+
+# Mount admin static assets (JS, CSS, etc.) at /admin-assets to avoid conflicts
+app.mount("/admin-assets", StaticFiles(directory="admin"), name="admin-assets")
 
 # CORS configuration
 # Note: Stremio recommends using "*" for allow_origins because Stremio clients come from
