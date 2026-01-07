@@ -7,6 +7,7 @@ Supports per-user channel storage and global image caching.
 """
 import json
 import logging
+import re
 import time
 import hashlib
 from datetime import datetime, timedelta
@@ -559,6 +560,263 @@ class RedisStore:
         except RedisConnectionError as e:
             logger.error(f"Cannot store audit log: {e}")
             # Don't raise - audit logging shouldn't break the app
+    
+    def store_parse_history(self, secret_str: str, parse_result: dict) -> None:
+        """
+        Store parse history entry for a user.
+        
+        Args:
+            secret_str: User's unique secret string
+            parse_result: Dictionary with parse result info (timestamp, success, channel_count, errors, etc.)
+        """
+        try:
+            self._ensure_connection()
+            timestamp = parse_result.get("timestamp", datetime.now().isoformat())
+            # Store in a list, keep last 50 entries
+            key = f"parse_history:{secret_str}"
+            # Add to list (left push to keep newest first)
+            self.redis_client.lpush(key, json.dumps(parse_result))
+            # Trim to keep only last 50 entries
+            self.redis_client.ltrim(key, 0, 49)
+            # Set expiration (90 days)
+            self.redis_client.expire(key, 60 * 60 * 24 * 90)
+        except RedisConnectionError as e:
+            logger.error(f"Cannot store parse history for {secret_str[:8]}...: {e}")
+    
+    def get_parse_history(self, secret_str: str, limit: int = 20) -> list[dict]:
+        """
+        Get parse history for a user.
+        
+        Args:
+            secret_str: User's unique secret string
+            limit: Maximum number of entries to return
+            
+        Returns:
+            List of parse history entries (newest first)
+        """
+        try:
+            self._ensure_connection()
+            key = f"parse_history:{secret_str}"
+            # Get entries (already sorted newest first due to lpush)
+            entries = self.redis_client.lrange(key, 0, limit - 1)
+            result = []
+            for entry in entries:
+                try:
+                    result.append(json.loads(entry))
+                except json.JSONDecodeError:
+                    continue
+            return result
+        except RedisConnectionError as e:
+            logger.error(f"Cannot get parse history for {secret_str[:8]}...: {e}")
+            return []
+    
+    def store_user_error(self, secret_str: str, error_entry: dict) -> None:
+        """
+        Store error log entry for a user.
+        
+        Args:
+            secret_str: User's unique secret string
+            error_entry: Dictionary with error info (timestamp, error_type, message, source, etc.)
+        """
+        try:
+            self._ensure_connection()
+            timestamp = error_entry.get("timestamp", datetime.now().isoformat())
+            # Store in a list, keep last 100 entries
+            key = f"user_errors:{secret_str}"
+            # Add to list (left push to keep newest first)
+            self.redis_client.lpush(key, json.dumps(error_entry))
+            # Trim to keep only last 100 entries
+            self.redis_client.ltrim(key, 0, 99)
+            # Set expiration (30 days)
+            self.redis_client.expire(key, 60 * 60 * 24 * 30)
+        except RedisConnectionError as e:
+            logger.error(f"Cannot store user error for {secret_str[:8]}...: {e}")
+    
+    def get_user_errors(self, secret_str: str, limit: int = 50) -> list[dict]:
+        """
+        Get error logs for a user.
+        
+        Args:
+            secret_str: User's unique secret string
+            limit: Maximum number of entries to return
+            
+        Returns:
+            List of error entries (newest first)
+        """
+        try:
+            self._ensure_connection()
+            key = f"user_errors:{secret_str}"
+            # Get entries (already sorted newest first due to lpush)
+            entries = self.redis_client.lrange(key, 0, limit - 1)
+            result = []
+            for entry in entries:
+                try:
+                    result.append(json.loads(entry))
+                except json.JSONDecodeError:
+                    continue
+            return result
+        except RedisConnectionError as e:
+            logger.error(f"Cannot get user errors for {secret_str[:8]}...: {e}")
+            return []
+    
+    # Logo override methods
+    def store_logo_override(self, secret_str: str, tvg_id: str, logo_url: str, is_regex: bool = False) -> None:
+        """
+        Store a logo override for a channel.
+        
+        Args:
+            secret_str: User's unique secret string
+            tvg_id: Channel identifier or regex pattern
+            logo_url: Override logo URL
+            is_regex: Whether tvg_id is a regex pattern
+        """
+        try:
+            self._ensure_connection()
+            key = f"logo_override:{secret_str}:{tvg_id}"
+            # Store as JSON to include metadata
+            override_data = {
+                "logo_url": logo_url,
+                "is_regex": is_regex
+            }
+            self.redis_client.set(key, json.dumps(override_data))
+            logger.info(f"Stored logo override for {secret_str[:8]}.../{tvg_id} (regex={is_regex})")
+        except RedisConnectionError as e:
+            logger.error(f"Cannot store logo override for {secret_str[:8]}.../{tvg_id}: {e}")
+            raise
+    
+    def get_logo_override(self, secret_str: str, tvg_id: str) -> str | None:
+        """
+        Get logo override for a channel, checking both exact matches and regex patterns.
+        Exact matches take precedence over regex patterns.
+        
+        Args:
+            secret_str: User's unique secret string
+            tvg_id: Channel identifier to match
+            
+        Returns:
+            Override logo URL if exists (exact match or regex match), None otherwise
+        """
+        try:
+            self._ensure_connection()
+            # First check for exact match - this takes precedence over regex patterns
+            exact_key = f"logo_override:{secret_str}:{tvg_id}"
+            override_data = self.redis_client.get(exact_key)
+            if override_data:
+                try:
+                    data = json.loads(override_data.decode('utf-8'))
+                    logo_url = data.get("logo_url")
+                    if logo_url:
+                        logger.debug(f"Found exact logo override for {secret_str[:8]}.../{tvg_id}: {logo_url[:50]}...")
+                        return logo_url
+                except (json.JSONDecodeError, AttributeError):
+                    # Legacy format (just URL string)
+                    logo_url = override_data.decode('utf-8')
+                    if logo_url:
+                        logger.debug(f"Found exact logo override (legacy format) for {secret_str[:8]}.../{tvg_id}: {logo_url[:50]}...")
+                        return logo_url
+            
+            # If no exact match, check regex patterns
+            # Skip the exact match key when scanning to avoid redundant checks
+            pattern = f"logo_override:{secret_str}:*"
+            for key in self.redis_client.scan_iter(match=pattern):
+                try:
+                    key_str = key.decode('utf-8')
+                    stored_tvg_id = key_str.replace(f"logo_override:{secret_str}:", "")
+                    
+                    # Skip exact match key (we already checked it above)
+                    if stored_tvg_id == tvg_id:
+                        continue
+                    
+                    # Get override data
+                    override_data = self.redis_client.get(key)
+                    if not override_data:
+                        continue
+                    
+                    try:
+                        data = json.loads(override_data.decode('utf-8'))
+                        is_regex = data.get("is_regex", False)
+                        logo_url = data.get("logo_url")
+                    except (json.JSONDecodeError, AttributeError):
+                        # Legacy format - skip regex matching for legacy entries
+                        continue
+                    
+                    # Only check regex patterns (skip exact matches)
+                    if is_regex and logo_url:
+                        try:
+                            # Compile and match the regex pattern
+                            regex_pattern = re.compile(stored_tvg_id)
+                            if regex_pattern.match(tvg_id):
+                                logger.debug(f"Matched regex pattern {stored_tvg_id} for {secret_str[:8]}.../{tvg_id}: {logo_url[:50]}...")
+                                return logo_url
+                        except re.error as e:
+                            logger.warning(f"Invalid regex pattern {stored_tvg_id}: {e}")
+                            continue
+                except Exception as e:
+                    logger.error(f"Error processing logo override key {key}: {e}")
+                    continue
+            
+            return None
+        except RedisConnectionError as e:
+            logger.error(f"Cannot get logo override for {secret_str[:8]}.../{tvg_id}: {e}")
+            return None
+    
+    def delete_logo_override(self, secret_str: str, tvg_id: str) -> None:
+        """
+        Delete a logo override for a channel.
+        
+        Args:
+            secret_str: User's unique secret string
+            tvg_id: Channel identifier
+        """
+        try:
+            self._ensure_connection()
+            key = f"logo_override:{secret_str}:{tvg_id}"
+            self.redis_client.delete(key)
+            logger.info(f"Deleted logo override for {secret_str[:8]}.../{tvg_id}")
+        except RedisConnectionError as e:
+            logger.error(f"Cannot delete logo override for {secret_str[:8]}.../{tvg_id}: {e}")
+            raise
+    
+    def get_all_logo_overrides(self, secret_str: str) -> dict[str, dict]:
+        """
+        Get all logo overrides for a user.
+        
+        Args:
+            secret_str: User's unique secret string
+            
+        Returns:
+            Dictionary mapping tvg_id/pattern to dict with 'logo_url' and 'is_regex' keys
+        """
+        try:
+            self._ensure_connection()
+            pattern = f"logo_override:{secret_str}:*"
+            overrides = {}
+            for key in self.redis_client.scan_iter(match=pattern):
+                try:
+                    # Extract tvg_id from key: "logo_override:{secret_str}:{tvg_id}"
+                    key_str = key.decode('utf-8')
+                    tvg_id = key_str.replace(f"logo_override:{secret_str}:", "")
+                    override_data = self.redis_client.get(key)
+                    if override_data:
+                        try:
+                            data = json.loads(override_data.decode('utf-8'))
+                            overrides[tvg_id] = {
+                                "logo_url": data.get("logo_url", ""),
+                                "is_regex": data.get("is_regex", False)
+                            }
+                        except (json.JSONDecodeError, AttributeError):
+                            # Legacy format (just URL string)
+                            overrides[tvg_id] = {
+                                "logo_url": override_data.decode('utf-8'),
+                                "is_regex": False
+                            }
+                except Exception as e:
+                    logger.error(f"Error processing logo override key {key}: {e}")
+                    continue
+            return overrides
+        except RedisConnectionError as e:
+            logger.error(f"Cannot get logo overrides for {secret_str[:8]}...: {e}")
+            return {}
 
 
 if __name__ == "__main__":

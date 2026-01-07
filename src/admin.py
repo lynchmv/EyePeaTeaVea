@@ -10,6 +10,7 @@ This module provides admin-only endpoints for:
 import os
 import json
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, Request, Cookie
@@ -17,7 +18,7 @@ from fastapi.responses import JSONResponse
 from .redis_store import RedisStore, RedisConnectionError
 from .models import (
     AdminLoginRequest, AdminUser, AdminSession, UserSummary, SystemStats,
-    UserData, UpdateConfigureRequest, ChangePasswordRequest
+    UserData, UpdateConfigureRequest, ChangePasswordRequest, LogoOverrideRequest
 )
 from .admin_auth import (
     authenticate_admin, create_admin_session, get_session,
@@ -300,6 +301,12 @@ async def get_user(
     epg_data = redis_store.get_epg_data(secret_str)
     epg_channel_count = len(epg_data) if epg_data else 0
     
+    # Get parse history
+    parse_history = redis_store.get_parse_history(secret_str, limit=20)
+    
+    # Get recent errors
+    recent_errors = redis_store.get_user_errors(secret_str, limit=20)
+    
     log_admin_action(redis_store, session.username, "user_viewed", resource=f"user:{secret_str}")
     
     return {
@@ -316,7 +323,9 @@ async def get_user(
             "event_count": event_count,
             "epg_channel_count": epg_channel_count,
             "m3u_source_count": len(user_data.m3u_sources)
-        }
+        },
+        "parse_history": parse_history,
+        "recent_errors": recent_errors
     }
 
 @admin_router.put("/users/{secret_str}")
@@ -433,10 +442,40 @@ async def clear_user_cache(
     secret_str: str,
     session: AdminSession = Depends(require_admin())
 ):
-    """Clear cache for a user."""
+    """Clear cache for a user (channels, manifest, EPG, and images)."""
+    user_data = redis_store.get_user_data(secret_str)
+    if not user_data:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Clear channel data, manifest, and EPG
     redis_store.clear_user_channels(secret_str)
     redis_store.redis_client.delete(f"manifest:{secret_str}")
     redis_store.redis_client.delete(f"epg:{secret_str}")
+    
+    # Also clear image cache
+    try:
+        all_channels = redis_store.get_all_channels(secret_str)
+        image_types = ["poster", "background", "logo", "icon"]
+        deleted_image_count = 0
+        
+        for tvg_id, channel_json in all_channels.items():
+            for image_type in image_types:
+                cache_key = f"{tvg_id}_{image_type}"
+                redis_key = f"processed_image:{cache_key}"
+                result = redis_store.redis_client.delete(redis_key)
+                if result > 0:
+                    deleted_image_count += result
+                
+                # Delete placeholder cache keys
+                pattern = f"processed_image:{cache_key}_placeholder_*"
+                placeholder_keys = list(redis_store.redis_client.scan_iter(match=pattern))
+                if placeholder_keys:
+                    result = redis_store.redis_client.delete(*placeholder_keys)
+                    deleted_image_count += result
+        
+        logger.info(f"Cleared {deleted_image_count} cached image(s) for user {secret_str[:8]}...")
+    except Exception as e:
+        logger.warning(f"Could not clear image cache for user {secret_str[:8]}...: {e}")
     
     log_admin_action(
         redis_store,
@@ -734,3 +773,332 @@ async def get_audit_logs(
         logger.error(f"Error fetching audit logs: {e}")
     
     return {"logs": logs, "count": len(logs)}
+
+# Logo override endpoints
+@admin_router.get("/users/{secret_str}/logo-overrides")
+async def get_logo_overrides(
+    secret_str: str,
+    session: AdminSession = Depends(require_viewer())
+):
+    """Get all logo overrides for a user."""
+    user_data = redis_store.get_user_data(secret_str)
+    if not user_data:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    overrides_dict = redis_store.get_all_logo_overrides(secret_str)
+    
+    # Convert to list format for API response
+    overrides = []
+    override_tvg_ids = set()  # For quick lookup
+    for tvg_id, override_info in overrides_dict.items():
+        overrides.append({
+            "tvg_id": tvg_id,
+            "logo_url": override_info.get("logo_url", ""),
+            "is_regex": override_info.get("is_regex", False)
+        })
+        override_tvg_ids.add(tvg_id)
+    
+    # Also return available channels for reference
+    channels = redis_store.get_all_channels(secret_str)
+    available_channels = []
+    for tvg_id, channel_json in channels.items():
+        try:
+            channel = json.loads(channel_json)
+            # Check if this channel has an exact override (not regex)
+            has_override = tvg_id in override_tvg_ids
+            available_channels.append({
+                "tvg_id": tvg_id,
+                "tvg_name": channel.get("tvg_name", tvg_id),
+                "has_override": has_override
+            })
+        except json.JSONDecodeError:
+            continue
+    
+    # Sort by name
+    available_channels.sort(key=lambda x: x["tvg_name"].lower())
+    
+    log_admin_action(redis_store, session.username, "logo_overrides_viewed", resource=f"user:{secret_str}")
+    
+    return {
+        "overrides": overrides,
+        "available_channels": available_channels
+    }
+
+@admin_router.post("/users/{secret_str}/logo-overrides")
+async def create_logo_override(
+    secret_str: str,
+    override_data: LogoOverrideRequest,
+    session: AdminSession = Depends(require_admin())
+):
+    """Create or update a logo override for a channel."""
+    user_data = redis_store.get_user_data(secret_str)
+    if not user_data:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Validate regex pattern if is_regex is True
+    if override_data.is_regex:
+        try:
+            re.compile(override_data.tvg_id)
+        except re.error as e:
+            raise HTTPException(status_code=400, detail=f"Invalid regex pattern: {e}")
+    
+    redis_store.store_logo_override(secret_str, override_data.tvg_id, override_data.logo_url, override_data.is_regex)
+    
+    # Invalidate image cache for affected channels
+    try:
+        channels_to_invalidate = []
+        
+        if override_data.is_regex:
+            # For regex patterns, find all channels that match
+            try:
+                regex_pattern = re.compile(override_data.tvg_id)
+                all_channels = redis_store.get_all_channels(secret_str)
+                for tvg_id, channel_json in all_channels.items():
+                    if regex_pattern.match(tvg_id):
+                        channels_to_invalidate.append(tvg_id)
+                logger.info(f"Found {len(channels_to_invalidate)} channel(s) matching regex pattern '{override_data.tvg_id}'")
+            except re.error as e:
+                logger.warning(f"Invalid regex pattern for cache invalidation: {override_data.tvg_id}: {e}")
+        else:
+            # For exact matches, just invalidate this one channel
+            channels_to_invalidate = [override_data.tvg_id]
+        
+        # Invalidate cache for all affected channels
+        image_types = ["poster", "background", "logo", "icon"]
+        deleted_count = 0
+        
+        # Sample a few channel names for debugging
+        sample_channels = channels_to_invalidate[:3] if len(channels_to_invalidate) > 3 else channels_to_invalidate
+        logger.debug(f"Sample channels to invalidate: {sample_channels}")
+        
+        for tvg_id in channels_to_invalidate:
+            for image_type in image_types:
+                # Delete regular cache keys
+                cache_key = f"{tvg_id}_{image_type}"
+                redis_key = f"processed_image:{cache_key}"
+                
+                # Try to delete - delete returns count of deleted keys
+                result = redis_store.redis_client.delete(redis_key)
+                if result > 0:
+                    deleted_count += result
+                    logger.debug(f"Deleted cache key: {redis_key}")
+                
+                # Delete placeholder cache keys (using pattern matching for version suffix)
+                # Pattern matches: processed_image:{tvg_id}_{image_type}_placeholder_*
+                pattern = f"processed_image:{cache_key}_placeholder_*"
+                placeholder_keys = list(redis_store.redis_client.scan_iter(match=pattern))
+                if placeholder_keys:
+                    result = redis_store.redis_client.delete(*placeholder_keys)
+                    deleted_count += result
+                    key_strs = [k.decode('utf-8') if isinstance(k, bytes) else str(k) for k in placeholder_keys[:3]]
+                    logger.debug(f"Deleted {len(placeholder_keys)} placeholder cache key(s) for {tvg_id} {image_type}: {key_strs}")
+                else:
+                    logger.debug(f"No placeholder keys found matching pattern: {pattern}")
+        
+        if deleted_count > 0:
+            logger.info(f"Invalidated {deleted_count} cached image(s) for {len(channels_to_invalidate)} channel(s) matching pattern '{override_data.tvg_id}'")
+        else:
+            logger.warning(f"No cached images found to invalidate for {len(channels_to_invalidate)} channel(s) matching pattern '{override_data.tvg_id}'. Images may not have been cached yet, or cache keys may use a different format.")
+            # Try to find what cache keys actually exist for debugging
+            if len(channels_to_invalidate) > 0:
+                sample_tvg_id = channels_to_invalidate[0]
+                debug_pattern = f"processed_image:{sample_tvg_id}_*"
+                existing_keys = list(redis_store.redis_client.scan_iter(match=debug_pattern))[:5]
+                if existing_keys:
+                    key_strs = [k.decode('utf-8') if isinstance(k, bytes) else str(k) for k in existing_keys]
+                    logger.debug(f"Found existing cache keys for sample channel '{sample_tvg_id}': {key_strs}")
+                else:
+                    logger.debug(f"No cache keys found matching pattern: {debug_pattern}")
+    except Exception as e:
+        logger.warning(f"Could not invalidate image cache for {override_data.tvg_id}: {e}")
+    
+    log_admin_action(
+        redis_store,
+        session.username,
+        "logo_override_created",
+        resource=f"user:{secret_str}",
+        details={"tvg_id": override_data.tvg_id, "logo_url": override_data.logo_url, "is_regex": override_data.is_regex}
+    )
+    
+    return {
+        "message": "Logo override created successfully",
+        "tvg_id": override_data.tvg_id,
+        "logo_url": override_data.logo_url,
+        "is_regex": override_data.is_regex
+    }
+
+@admin_router.delete("/users/{secret_str}/logo-overrides/{tvg_id}")
+async def delete_logo_override(
+    secret_str: str,
+    tvg_id: str,
+    session: AdminSession = Depends(require_admin())
+):
+    """Delete a logo override for a channel."""
+    user_data = redis_store.get_user_data(secret_str)
+    if not user_data:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    override = redis_store.get_logo_override(secret_str, tvg_id)
+    if not override:
+        raise HTTPException(status_code=404, detail="Logo override not found")
+    
+    redis_store.delete_logo_override(secret_str, tvg_id)
+    
+    # Also invalidate cache for this channel
+    try:
+        image_types = ["poster", "background", "logo", "icon"]
+        deleted_count = 0
+        
+        for image_type in image_types:
+            cache_key = f"{tvg_id}_{image_type}"
+            redis_key = f"processed_image:{cache_key}"
+            result = redis_store.redis_client.delete(redis_key)
+            if result > 0:
+                deleted_count += result
+            
+            # Delete placeholder cache keys
+            pattern = f"processed_image:{cache_key}_placeholder_*"
+            placeholder_keys = list(redis_store.redis_client.scan_iter(match=pattern))
+            if placeholder_keys:
+                result = redis_store.redis_client.delete(*placeholder_keys)
+                deleted_count += result
+        
+        logger.info(f"Invalidated {deleted_count} cached image(s) for channel '{tvg_id}' after deleting logo override")
+    except Exception as e:
+        logger.warning(f"Could not invalidate image cache for {tvg_id} after deleting override: {e}")
+    
+    log_admin_action(
+        redis_store,
+        session.username,
+        "logo_override_deleted",
+        resource=f"user:{secret_str}",
+        details={"tvg_id": tvg_id}
+    )
+    
+    return {"message": "Logo override deleted successfully", "tvg_id": tvg_id}
+
+@admin_router.post("/users/{secret_str}/clear-image-cache")
+async def clear_user_image_cache(
+    secret_str: str,
+    session: AdminSession = Depends(require_admin())
+):
+    """Clear all cached images for a user's channels."""
+    user_data = redis_store.get_user_data(secret_str)
+    if not user_data:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    try:
+        # Get all channels for this user
+        all_channels = redis_store.get_all_channels(secret_str)
+        image_types = ["poster", "background", "logo", "icon"]
+        deleted_count = 0
+        
+        for tvg_id, channel_json in all_channels.items():
+            for image_type in image_types:
+                # Delete regular cache keys
+                cache_key = f"{tvg_id}_{image_type}"
+                redis_key = f"processed_image:{cache_key}"
+                result = redis_store.redis_client.delete(redis_key)
+                if result > 0:
+                    deleted_count += result
+                
+                # Delete placeholder cache keys
+                pattern = f"processed_image:{cache_key}_placeholder_*"
+                placeholder_keys = list(redis_store.redis_client.scan_iter(match=pattern))
+                if placeholder_keys:
+                    result = redis_store.redis_client.delete(*placeholder_keys)
+                    deleted_count += result
+        
+        log_admin_action(
+            redis_store,
+            session.username,
+            "image_cache_cleared",
+            resource=f"user:{secret_str}",
+            details={"channels": len(all_channels), "deleted_keys": deleted_count}
+        )
+        
+        return {
+            "message": "Image cache cleared successfully",
+            "channels_processed": len(all_channels),
+            "deleted_keys": deleted_count
+        }
+    except Exception as e:
+        logger.error(f"Error clearing image cache for user {secret_str[:8]}...: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to clear cache: {str(e)}")
+
+@admin_router.post("/users/{secret_str}/clear-cache/{tvg_id}")
+async def clear_channel_cache(
+    secret_str: str,
+    tvg_id: str,
+    session: AdminSession = Depends(require_admin())
+):
+    """Clear cached images for a specific channel."""
+    user_data = redis_store.get_user_data(secret_str)
+    if not user_data:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Verify channel exists for this user
+    channel = redis_store.get_channel(secret_str, tvg_id)
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    
+    try:
+        image_types = ["poster", "background", "logo", "icon"]
+        deleted_count = 0
+        
+        for image_type in image_types:
+            # Delete regular cache keys
+            cache_key = f"{tvg_id}_{image_type}"
+            redis_key = f"processed_image:{cache_key}"
+            result = redis_store.redis_client.delete(redis_key)
+            if result > 0:
+                deleted_count += result
+            
+            # Delete placeholder cache keys
+            pattern = f"processed_image:{cache_key}_placeholder_*"
+            placeholder_keys = list(redis_store.redis_client.scan_iter(match=pattern))
+            if placeholder_keys:
+                result = redis_store.redis_client.delete(*placeholder_keys)
+                deleted_count += result
+        
+        log_admin_action(
+            redis_store,
+            session.username,
+            "channel_cache_cleared",
+            resource=f"user:{secret_str}",
+            details={"tvg_id": tvg_id, "deleted_keys": deleted_count}
+        )
+        
+        return {
+            "message": "Channel cache cleared successfully",
+            "tvg_id": tvg_id,
+            "deleted_keys": deleted_count
+        }
+    except Exception as e:
+        logger.error(f"Error clearing cache for channel {tvg_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to clear cache: {str(e)}")
+    
+    # Invalidate image cache for this channel
+    try:
+        patterns = [
+            f"processed_image:{tvg_id}_poster*",
+            f"processed_image:{tvg_id}_background*",
+            f"processed_image:{tvg_id}_logo*",
+            f"processed_image:{tvg_id}_icon*"
+        ]
+        for pattern in patterns:
+            keys = list(redis_store.redis_client.scan_iter(match=pattern))
+            if keys:
+                redis_store.redis_client.delete(*keys)
+    except Exception as e:
+        logger.warning(f"Could not invalidate image cache for {tvg_id}: {e}")
+    
+    log_admin_action(
+        redis_store,
+        session.username,
+        "logo_override_deleted",
+        resource=f"user:{secret_str}",
+        details={"tvg_id": tvg_id}
+    )
+    
+    return {"message": "Logo override deleted successfully"}

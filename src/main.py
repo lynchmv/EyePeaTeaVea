@@ -149,12 +149,13 @@ app = FastAPI(
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Include admin router - API routes are registered here
+# Include admin router FIRST - API routes are registered here
+# This ensures API routes are available before frontend routes
 app.include_router(admin_router)
 
 # Admin frontend page routes - serve HTML for browser navigation
-# These routes check Accept header - if it's JSON (API call), let it 404 so router handles it
-# FastAPI will try these routes first, but if they raise 404, it continues to router
+# These routes are defined AFTER the router, so they take precedence for browser navigation
+# API calls (with Accept: application/json) will be handled by the router above
 @app.get("/admin/")
 async def admin_dashboard(request: Request):
     """Serve admin dashboard HTML or let API route handle it."""
@@ -165,6 +166,15 @@ async def admin_dashboard(request: Request):
 @app.get("/admin/users")
 async def admin_users_page(request: Request):
     """Serve admin dashboard HTML or let API route handle it."""
+    if "application/json" in request.headers.get("accept", ""):
+        raise HTTPException(status_code=404)  # Let router handle API calls
+    return FileResponse('admin/index.html')
+
+@app.get("/admin/users/{secret_str}")
+async def admin_user_detail_page(request: Request, secret_str: str):
+    """Serve admin dashboard HTML for user detail page."""
+    # Check if this is an API request (has Accept: application/json)
+    # API calls will hit the router's /admin/users/{secret_str} route (defined above)
     if "application/json" in request.headers.get("accept", ""):
         raise HTTPException(status_code=404)  # Let router handle API calls
     return FileResponse('admin/index.html')
@@ -396,6 +406,13 @@ async def get_image_response(
     else:
         channel = get_channel_data(secret_str, tvg_id)
         image_url = channel["tvg_logo"]
+        
+        # Check for logo override
+        override_url = redis_store.get_logo_override(secret_str, tvg_id)
+        if override_url:
+            logger.debug(f"Using logo override for {secret_str[:8]}.../{tvg_id}: {override_url}")
+            image_url = override_url
+        
         # Use parsed event_title if available (for events), otherwise use tvg_name
         if channel.get("is_event") and channel.get("event_title"):
             title = channel["event_title"]
@@ -759,7 +776,12 @@ async def get_manifest(secret_str: str, user_data: UserData = Depends(get_user_d
 app.mount("/frontend", StaticFiles(directory="frontend", html=True), name="frontend")
 
 @app.get("/{secret_str}/poster/{tvg_id}.png")
-async def get_poster_image(secret_str: str, tvg_id: str, user_data: UserData = Depends(get_user_data_dependency)):
+async def get_poster_image(
+    secret_str: str, 
+    tvg_id: str, 
+    v: str | None = None,  # Cache-busting version parameter
+    user_data: UserData = Depends(get_user_data_dependency)
+):
     """Get a poster image for a channel."""
     return await get_image_response(secret_str, tvg_id, get_poster)
 
@@ -784,6 +806,13 @@ async def get_icon_image(secret_str: str, tvg_id: str, user_data: UserData = Dep
     else:
         channel = get_channel_data(secret_str, tvg_id)
         image_url = channel["tvg_logo"]
+        
+        # Check for logo override
+        override_url = redis_store.get_logo_override(secret_str, tvg_id)
+        if override_url:
+            logger.debug(f"Using logo override for icon {secret_str[:8]}.../{tvg_id}: {override_url}")
+            image_url = override_url
+        
         # Use parsed event_title if available (for events), otherwise use tvg_name
         if channel.get("is_event") and channel.get("event_title"):
             channel_name = channel["event_title"]
@@ -860,7 +889,12 @@ async def get_catalog(
         if skip > 0:
             filtered_channels = filtered_channels[skip:]
 
-        metas = [create_meta(channel, secret_str, ADDON_ID_PREFIX, HOST_URL) for channel in filtered_channels]
+        # Create metas with logo override URLs for cache-busting
+        metas = []
+        for channel in filtered_channels:
+            tvg_id = channel.get("tvg_id", "")
+            override_url = redis_store.get_logo_override(secret_str, tvg_id)
+            metas.append(create_meta(channel, secret_str, ADDON_ID_PREFIX, HOST_URL, override_url))
 
         return {"metas": metas}
 
@@ -890,7 +924,9 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
                 if channel.get("is_event"):
                     current_event_hash_suffix = hashlib.sha256(channel["event_title"].encode()).hexdigest()[:EVENT_HASH_SUFFIX_LENGTH]
                     if current_event_hash_suffix == event_hash_suffix:
-                        meta = create_meta(channel, secret_str, ADDON_ID_PREFIX, HOST_URL)
+                        tvg_id = channel.get("tvg_id", "")
+                        override_url = redis_store.get_logo_override(secret_str, tvg_id)
+                        meta = create_meta(channel, secret_str, ADDON_ID_PREFIX, HOST_URL, override_url)
                         meta.update({"runtime": "", "releaseInfo": "", "links": []})
                         return {"meta": meta}
             except json.JSONDecodeError as e:
@@ -903,7 +939,8 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
             try:
                 channel = json.loads(channel_json)
                 if not channel.get("is_event"):
-                    meta = create_meta(channel, secret_str, ADDON_ID_PREFIX, HOST_URL)
+                    override_url = redis_store.get_logo_override(secret_str, tvg_id)
+                    meta = create_meta(channel, secret_str, ADDON_ID_PREFIX, HOST_URL, override_url)
                     
                     # Enhance with EPG program information if available
                     # Try multiple lookup strategies in case EPG was stored with different key

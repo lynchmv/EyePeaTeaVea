@@ -4,12 +4,16 @@ FROM python:3.11-slim
 # Set the working directory in the container
 WORKDIR /app
 
-# Install git, fonts, and CA certificates for cloning tv-logos repository, text rendering, and SSL verification
+# Install git, fonts, CA certificates, and SVG rendering libraries
+# SVG libraries (libcairo2-dev, libpango1.0-dev) are required for cairosvg
+# Note: libgdk-pixbuf2.0-dev is not available in Debian Trixie, but cairosvg works without it
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     ca-certificates \
     fonts-dejavu-core \
     fonts-liberation \
+    libcairo2-dev \
+    libpango1.0-dev \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

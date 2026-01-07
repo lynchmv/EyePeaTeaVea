@@ -8,6 +8,7 @@ in Redis. Each user can have their own cron schedule for updates.
 import os
 import redis
 import logging
+from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
@@ -94,6 +95,28 @@ class Scheduler:
         
         # Fetch and store EPG data if available
         self._fetch_and_store_epg(secret_str, user_data, all_channels_list)
+        
+        # Store parse history
+        parse_result = {
+            "timestamp": datetime.now().isoformat(),
+            "success": len(errors) == 0,
+            "channel_count": len(all_channels_list),
+            "error_count": len(errors),
+            "errors": errors,
+            "sources_processed": len(user_data.m3u_sources),
+            "sources_failed": len([e for e in errors if "Error parsing M3U source" in e])
+        }
+        self.redis_store.store_parse_history(secret_str, parse_result)
+        
+        # Store errors in user error log
+        for error in errors:
+            error_entry = {
+                "timestamp": datetime.now().isoformat(),
+                "error_type": "parse_error",
+                "message": error,
+                "secret_str": secret_str
+            }
+            self.redis_store.store_user_error(secret_str, error_entry)
         
         if errors:
             logger.warning(f"Encountered {len(errors)} errors during M3U fetch for secret_str: {secret_str[:8]}...")

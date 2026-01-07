@@ -105,7 +105,8 @@ def create_meta(
     channel: dict[str, Any], 
     secret_str: str, 
     addon_id_prefix: str, 
-    host_url: str
+    host_url: str,
+    logo_override_url: str | None = None
 ) -> dict[str, Any]:
     """
     Create a Stremio-compatible metadata object for a channel or event.
@@ -121,6 +122,7 @@ def create_meta(
         secret_str: User's secret string for URL generation
         addon_id_prefix: Prefix for generating unique IDs (e.g., "eyepeateavea")
         host_url: Base URL for generating image URLs
+        logo_override_url: Optional logo override URL for cache-busting
         
     Returns:
         Dictionary containing Stremio metadata with keys:
@@ -154,14 +156,21 @@ def create_meta(
         description = f"{channel['tvg_name']}"
         genres = [channel["group_title"]]
 
+    # Add cache-busting parameter if logo override exists
+    cache_param = ""
+    if logo_override_url:
+        # Use first 8 chars of MD5 hash of override URL as cache-busting parameter
+        override_hash = hashlib.md5(logo_override_url.encode()).hexdigest()[:8]
+        cache_param = f"?v={override_hash}"
+
     return {
         "id": meta_id,
         "type": channel_type,
         "name": name,
-        "poster": f"{host_url}/{secret_str}/poster/{channel['tvg_id']}.png",
+        "poster": f"{host_url}/{secret_str}/poster/{channel['tvg_id']}.png{cache_param}",
         "posterShape": "portrait",
-        "background": f"{host_url}/{secret_str}/background/{channel['tvg_id']}.png",
-        "logo": f"{host_url}/{secret_str}/logo/{channel['tvg_id']}.png",
+        "background": f"{host_url}/{secret_str}/background/{channel['tvg_id']}.png{cache_param}",
+        "logo": f"{host_url}/{secret_str}/logo/{channel['tvg_id']}.png{cache_param}",
         "description": description,
         "genres": genres,
     }

@@ -191,6 +191,176 @@
             width: 3rem;
             height: 3rem;
         }
+        
+        /* Dark mode styles */
+        [data-theme="dark"] {
+            --bg-primary: #1a1a1a;
+            --bg-secondary: #2d2d2d;
+            --bg-tertiary: #3d3d3d;
+            --text-primary: #e0e0e0;
+            --text-secondary: #b0b0b0;
+            --border-color: #444;
+        }
+        
+        [data-theme="dark"] body {
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+        }
+        
+        [data-theme="dark"] .sidebar {
+            background: linear-gradient(180deg, #1a1a1a 0%, #2d2d2d 100%);
+        }
+        
+        [data-theme="dark"] .header,
+        [data-theme="dark"] .stat-card,
+        [data-theme="dark"] .table-container {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border-color: var(--border-color);
+        }
+        
+        [data-theme="dark"] .table {
+            color: var(--text-primary);
+        }
+        
+        [data-theme="dark"] .table thead th {
+            border-color: var(--border-color);
+        }
+        
+        [data-theme="dark"] .table tbody td {
+            border-color: var(--border-color);
+        }
+        
+        [data-theme="dark"] .form-control,
+        [data-theme="dark"] .form-select {
+            background-color: var(--bg-tertiary);
+            border-color: var(--border-color);
+            color: var(--text-primary);
+        }
+        
+        [data-theme="dark"] .form-control:focus,
+        [data-theme="dark"] .form-select:focus {
+            background-color: var(--bg-tertiary);
+            border-color: #0d6efd;
+            color: var(--text-primary);
+        }
+        
+        [data-theme="dark"] .card {
+            background-color: var(--bg-secondary);
+            border-color: var(--border-color);
+        }
+        
+        [data-theme="dark"] .list-group-item {
+            background-color: var(--bg-tertiary);
+            border-color: var(--border-color);
+            color: var(--text-primary);
+        }
+        
+        [data-theme="dark"] .modal-content {
+            background-color: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+        
+        [data-theme="dark"] .modal-header {
+            border-color: var(--border-color);
+        }
+        
+        [data-theme="dark"] .modal-footer {
+            border-color: var(--border-color);
+        }
+        
+        [data-theme="dark"] .bg-light {
+            background-color: var(--bg-tertiary) !important;
+        }
+        
+        [data-theme="dark"] .text-muted {
+            color: var(--text-secondary) !important;
+        }
+        
+        [data-theme="dark"] .alert {
+            background-color: var(--bg-tertiary);
+            border-color: var(--border-color);
+        }
+        
+        [data-theme="dark"] .alert-danger {
+            background-color: rgba(220, 53, 69, 0.2);
+            border-color: #dc3545;
+            color: #f5c6cb;
+        }
+        
+        [data-theme="dark"] .alert-success {
+            background-color: rgba(25, 135, 84, 0.2);
+            border-color: #198754;
+            color: #d1e7dd;
+        }
+        
+        [data-theme="dark"] .alert-warning {
+            background-color: rgba(255, 193, 7, 0.2);
+            border-color: #ffc107;
+            color: #fff3cd;
+        }
+        
+        [data-theme="dark"] .btn-outline-secondary {
+            border-color: var(--border-color);
+            color: var(--text-primary);
+        }
+        
+        [data-theme="dark"] .btn-outline-secondary:hover {
+            background-color: var(--bg-tertiary);
+            border-color: var(--border-color);
+            color: var(--text-primary);
+        }
+        
+        [data-theme="dark"] .btn-outline-primary {
+            border-color: #0d6efd;
+            color: #0d6efd;
+        }
+        
+        [data-theme="dark"] .btn-outline-primary:hover {
+            background-color: #0d6efd;
+            color: white;
+        }
+        
+        [data-theme="dark"] .btn-outline-danger {
+            border-color: #dc3545;
+            color: #dc3545;
+        }
+        
+        [data-theme="dark"] .btn-outline-danger:hover {
+            background-color: #dc3545;
+            color: white;
+        }
+        
+        [data-theme="dark"] code {
+            background-color: var(--bg-tertiary);
+            color: #e83e8c;
+        }
+        
+        [data-theme="dark"] .login-container {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+        
+        .theme-toggle {
+            cursor: pointer;
+            font-size: 1.2rem;
+            padding: 5px 10px;
+            border-radius: 5px;
+            transition: background-color 0.2s;
+            color: var(--text-primary);
+        }
+        
+        .theme-toggle:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+        
+        [data-theme="dark"] .theme-toggle {
+            color: #ffc107;
+        }
+        
+        [data-theme="dark"] .theme-toggle:hover {
+            background-color: rgba(255, 193, 7, 0.1);
+        }
     </style>
 </head>
 <body>
@@ -236,7 +406,10 @@
             <!-- Header -->
             <div class="header">
                 <h1 id="pageTitle">Dashboard</h1>
-                <div class="user-info">
+                <div class="user-info d-flex align-items-center gap-3">
+                    <span class="theme-toggle" id="themeToggle" title="Toggle dark mode">
+                        <i class="bi bi-moon-fill" id="themeIcon"></i>
+                    </span>
                     <span id="currentUser">Admin</span>
                     <span class="badge bg-secondary" id="userRole">admin</span>
                 </div>
@@ -369,6 +542,18 @@
                 </div>
             </div>
 
+            <!-- User Detail Page -->
+            <div id="userDetailPage" class="page-content hidden">
+                <div class="mb-3">
+                    <button class="btn btn-outline-secondary" onclick="navigateToPage('users')">
+                        <i class="bi bi-arrow-left"></i> Back to Users
+                    </button>
+                </div>
+                <div id="userDetailContent" class="loading">
+                    <div class="spinner-border text-primary" role="status"></div>
+                </div>
+            </div>
+
             <!-- Settings Page -->
             <div id="settingsPage" class="page-content hidden">
                 <div class="table-container">
@@ -406,23 +591,42 @@
         </div>
     </div>
 
-    <!-- User Detail Modal -->
-    <div class="modal fade" id="userDetailModal" tabindex="-1">
-        <div class="modal-dialog modal-lg">
+    <!-- Logo Override Modal -->
+    <div class="modal fade" id="logoOverrideModal" tabindex="-1">
+        <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title">User Details</h5>
+                    <h5 class="modal-title">Add Logo Override</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
-                <div class="modal-body" id="userDetailContent">
-                    <div class="loading">
-                        <div class="spinner-border text-primary" role="status"></div>
-                    </div>
+                <div class="modal-body">
+                    <form id="logoOverrideForm">
+                        <div class="mb-3">
+                            <label for="overrideTvgId" class="form-label">Channel ID (tvg_id) or Regex Pattern</label>
+                            <input type="text" class="form-control" id="overrideTvgId" required placeholder="e.g., CNN, ESPN, or FanDuel.Sports.Network.*">
+                            <small class="form-text text-muted">Enter the exact channel identifier or a regex pattern (e.g., FanDuel.Sports.Network.*)</small>
+                        </div>
+                        <div class="mb-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="overrideIsRegex">
+                                <label class="form-check-label" for="overrideIsRegex">
+                                    This is a regex pattern
+                                </label>
+                            </div>
+                            <small class="form-text text-muted">Check this if the Channel ID above is a regex pattern that should match multiple channels</small>
+                        </div>
+                        <div class="mb-3">
+                            <label for="overrideLogoUrl" class="form-label">Logo URL</label>
+                            <input type="url" class="form-control" id="overrideLogoUrl" required placeholder="https://example.com/logo.png">
+                            <small class="form-text text-muted">Full URL to the logo image</small>
+                        </div>
+                        <div class="alert alert-danger hidden" id="logoOverrideError"></div>
+                        <div class="alert alert-success hidden" id="logoOverrideSuccess"></div>
+                    </form>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                    <button type="button" class="btn btn-primary" id="triggerParseBtn" style="display: none;">Trigger Parse</button>
-                    <button type="button" class="btn btn-danger" id="deleteUserBtn" style="display: none;">Delete User</button>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="submitLogoOverride()">Add Override</button>
                 </div>
             </div>
         </div>

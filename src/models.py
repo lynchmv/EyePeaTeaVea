@@ -193,3 +193,17 @@ class ChangePasswordRequest(BaseModel):
     """Request model for changing admin password."""
     old_password: str
     new_password: str
+
+class LogoOverrideRequest(BaseModel):
+    """Request model for creating/updating logo override."""
+    tvg_id: str
+    logo_url: str
+    is_regex: bool = False
+    
+    @field_validator('logo_url')
+    @classmethod
+    def validate_logo_url(cls, v: str) -> str:
+        """Validate logo URL."""
+        if not v or not v.strip():
+            raise ValueError("Logo URL cannot be empty")
+        return validate_url(v.strip())

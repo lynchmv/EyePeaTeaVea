@@ -19,12 +19,43 @@ async function apiFetch(url, options = {}) {
 // State management
 let currentUser = null;
 let currentPage = 'dashboard';
+let currentChannelsPage = 1;
+let currentEventsPage = 1;
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
+    initTheme();
     checkAuth();
     setupEventListeners();
 });
+
+// Theme management
+function initTheme() {
+    const savedTheme = localStorage.getItem('adminTheme') || 'light';
+    setTheme(savedTheme);
+}
+
+function setTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('adminTheme', theme);
+    
+    const themeIcon = document.getElementById('themeIcon');
+    if (themeIcon) {
+        if (theme === 'dark') {
+            themeIcon.className = 'bi bi-sun-fill';
+            themeIcon.parentElement.title = 'Switch to light mode';
+        } else {
+            themeIcon.className = 'bi bi-moon-fill';
+            themeIcon.parentElement.title = 'Switch to dark mode';
+        }
+    }
+}
+
+function toggleTheme() {
+    const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    setTheme(newTheme);
+}
 
 // Check authentication status
 async function checkAuth() {
@@ -72,21 +103,21 @@ function setupEventListeners() {
     
     // Channel search
     document.getElementById('channelSearchBtn').addEventListener('click', () => {
-        loadChannels();
+        loadChannels(1); // Reset to page 1 on search
     });
     document.getElementById('channelSearch').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
-            loadChannels();
+            loadChannels(1); // Reset to page 1 on search
         }
     });
     
     // Event search
     document.getElementById('eventSearchBtn').addEventListener('click', () => {
-        loadEvents();
+        loadEvents(1); // Reset to page 1 on search
     });
     document.getElementById('eventSearch').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
-            loadEvents();
+            loadEvents(1); // Reset to page 1 on search
         }
     });
     
@@ -102,6 +133,12 @@ function setupEventListeners() {
             }
         });
     });
+    
+    // Theme toggle
+    const themeToggle = document.getElementById('themeToggle');
+    if (themeToggle) {
+        themeToggle.addEventListener('click', toggleTheme);
+    }
 }
 
 // Handle login
@@ -215,9 +252,11 @@ function navigateToPage(page, updateHistory = true) {
                 loadSettings();
                 break;
             case 'channels':
+                currentChannelsPage = 1;
                 loadChannels();
                 break;
             case 'events':
+                currentEventsPage = 1;
                 loadEvents();
                 break;
         }
@@ -226,8 +265,12 @@ function navigateToPage(page, updateHistory = true) {
 
 // Handle browser back/forward buttons
 window.addEventListener('popstate', (event) => {
-    const page = event.state?.page || getPageFromPath();
-    navigateToPage(page, false);
+    if (event.state?.page === 'userDetail' && event.state?.secretStr) {
+        navigateToUserDetail(event.state.secretStr);
+    } else {
+        const page = event.state?.page || getPageFromPath();
+        navigateToPage(page, false);
+    }
 });
 
 // Get page from current path
@@ -236,6 +279,15 @@ function getPageFromPath() {
     if (path === '/admin' || path === '/admin/') {
         return 'dashboard';
     }
+    
+    // Check if it's a user detail page (e.g., /admin/users/{secret_str})
+    const userDetailMatch = path.match(/^\/admin\/users\/(.+)$/);
+    if (userDetailMatch) {
+        const secretStr = userDetailMatch[1];
+        navigateToUserDetail(secretStr);
+        return 'userDetail';
+    }
+    
     const match = path.match(/^\/admin\/([^/]+)/);
     if (match) {
         const page = match[1];
@@ -449,127 +501,561 @@ function loadUsersPage(page) {
     loadUsers();
 }
 
-// View user details
-async function viewUser(secretStr) {
-    const modal = new bootstrap.Modal(document.getElementById('userDetailModal'));
+// View user details - navigate to user detail page
+function viewUser(secretStr) {
+    // Navigate to user detail page with secret_str in URL
+    const newUrl = `/admin/users/${secretStr}`;
+    window.history.pushState({ page: 'userDetail', secretStr: secretStr }, '', newUrl);
+    navigateToUserDetail(secretStr);
+}
+
+// Navigate to user detail page
+async function navigateToUserDetail(secretStr) {
+    currentPage = 'userDetail';
+    
+    // Update sidebar - highlight users menu item
+    document.querySelectorAll('.sidebar-menu a').forEach(link => {
+        link.classList.remove('active');
+        if (link.dataset.page === 'users') {
+            link.classList.add('active');
+        }
+    });
+    
+    // Hide all pages
+    document.querySelectorAll('.page-content').forEach(p => {
+        p.classList.add('hidden');
+    });
+    
+    // Show user detail page
+    const pageElement = document.getElementById('userDetailPage');
+    if (pageElement) {
+        pageElement.classList.remove('hidden');
+        document.getElementById('pageTitle').textContent = `User: ${secretStr.substring(0, 16)}...`;
+        
+        // Load user details
+        await loadUserDetail(secretStr);
+    }
+}
+
+// Load user detail content
+async function loadUserDetail(secretStr) {
     const content = document.getElementById('userDetailContent');
-    const triggerParseBtn = document.getElementById('triggerParseBtn');
-    const deleteUserBtn = document.getElementById('deleteUserBtn');
-    
-    // Show modal with loading state
     content.innerHTML = '<div class="loading"><div class="spinner-border text-primary" role="status"></div></div>';
-    modal.show();
-    
-    // Hide action buttons initially
-    triggerParseBtn.style.display = 'none';
-    deleteUserBtn.style.display = 'none';
     
     try {
         const response = await apiFetch(`${API_BASE}/users/${secretStr}`);
         
         if (response.ok) {
             const user = await response.json();
-            
-            // Build user details HTML
-            let html = `
-                <div class="mb-3">
-                    <h6>Configuration</h6>
-                    <table class="table table-sm">
-                        <tr>
-                            <th width="40%">Secret String:</th>
-                            <td><code>${user.secret_str}</code></td>
-                        </tr>
-                        <tr>
-                            <th>Schedule:</th>
-                            <td><code>${user.configuration.parser_schedule_crontab}</code></td>
-                        </tr>
-                        <tr>
-                            <th>Host URL:</th>
-                            <td><a href="${user.configuration.host_url}" target="_blank">${user.configuration.host_url}</a></td>
-                        </tr>
-                        <tr>
-                            <th>Password Protected:</th>
-                            <td>${user.configuration.has_password ? '<span class="badge bg-success">Yes</span>' : '<span class="badge bg-secondary">No</span>'}</td>
-                        </tr>
-                        <tr>
-                            <th>Timezone:</th>
-                            <td>${user.configuration.timezone || 'Not set'}</td>
-                        </tr>
-                    </table>
-                </div>
-                
-                <div class="mb-3">
-                    <h6>M3U Sources</h6>
-                    <ul class="list-group">
-            `;
-            
-            user.configuration.m3u_sources.forEach((source, index) => {
-                html += `<li class="list-group-item"><small><code>${source}</code></small></li>`;
-            });
-            
-            html += `
-                    </ul>
-                </div>
-                
-                <div class="mb-3">
-                    <h6>Statistics</h6>
-                    <div class="row">
-                        <div class="col-md-4">
-                            <div class="card text-center">
-                                <div class="card-body">
-                                    <h3 class="card-title">${user.statistics.channel_count}</h3>
-                                    <p class="card-text text-muted">Channels</p>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="col-md-4">
-                            <div class="card text-center">
-                                <div class="card-body">
-                                    <h3 class="card-title">${user.statistics.event_count}</h3>
-                                    <p class="card-text text-muted">Events</p>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="col-md-4">
-                            <div class="card text-center">
-                                <div class="card-body">
-                                    <h3 class="card-title">${user.statistics.epg_channel_count}</h3>
-                                    <p class="card-text text-muted">EPG Channels</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="mb-3">
-                    <h6>Stremio Manifest URL</h6>
-                    <div class="input-group">
-                        <input type="text" class="form-control" id="manifestUrl" value="${user.configuration.host_url}/${user.secret_str}/manifest.json" readonly>
-                        <button class="btn btn-outline-secondary" type="button" onclick="copyToClipboard('manifestUrl')">
-                            <i class="bi bi-clipboard"></i> Copy
-                        </button>
-                    </div>
-                </div>
-            `;
-            
-            content.innerHTML = html;
-            
-            // Show action buttons if user has admin role
-            if (currentUser && currentUser.role !== 'viewer') {
-                triggerParseBtn.style.display = 'inline-block';
-                triggerParseBtn.onclick = () => triggerUserParse(secretStr);
-                deleteUserBtn.style.display = 'inline-block';
-                deleteUserBtn.onclick = () => {
-                    modal.hide();
-                    deleteUser(secretStr);
-                };
-            }
+            displayUserDetail(user);
         } else {
             content.innerHTML = '<div class="alert alert-danger">Failed to load user details</div>';
         }
     } catch (error) {
-        console.error('Error viewing user:', error);
+        console.error('Error loading user details:', error);
         content.innerHTML = '<div class="alert alert-danger">Error loading user details</div>';
+    }
+}
+
+// Display user detail on page
+function displayUserDetail(user) {
+    const content = document.getElementById('userDetailContent');
+    
+    let html = `
+        <div class="table-container mb-3">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5>User Details</h5>
+                ${currentUser && currentUser.role !== 'viewer' ? `
+                    <div>
+                        <button class="btn btn-primary me-2" onclick="triggerUserParse('${user.secret_str}')">
+                            <i class="bi bi-play-circle"></i> Trigger Parse
+                        </button>
+                        <button class="btn btn-warning me-2" onclick="clearUserCache('${user.secret_str}')">
+                            <i class="bi bi-arrow-clockwise"></i> Clear Cache
+                        </button>
+                        <button class="btn btn-danger" onclick="deleteUser('${user.secret_str}')">
+                            <i class="bi bi-trash"></i> Delete User
+                        </button>
+                    </div>
+                ` : ''}
+            </div>
+            
+            <div class="mb-3">
+                <h6>Configuration</h6>
+                <table class="table table-sm">
+                    <tr>
+                        <th width="30%">Secret String:</th>
+                        <td><code>${user.secret_str}</code></td>
+                    </tr>
+                    <tr>
+                        <th>Schedule:</th>
+                        <td><code>${user.configuration.parser_schedule_crontab}</code></td>
+                    </tr>
+                    <tr>
+                        <th>Host URL:</th>
+                        <td><a href="${user.configuration.host_url}" target="_blank">${user.configuration.host_url}</a></td>
+                    </tr>
+                    <tr>
+                        <th>Password Protected:</th>
+                        <td>${user.configuration.has_password ? '<span class="badge bg-success">Yes</span>' : '<span class="badge bg-secondary">No</span>'}</td>
+                    </tr>
+                    <tr>
+                        <th>Timezone:</th>
+                        <td>${user.configuration.timezone || 'Not set'}</td>
+                    </tr>
+                </table>
+            </div>
+            
+            <div class="mb-3">
+                <h6>M3U Sources</h6>
+                <ul class="list-group">
+    `;
+    
+    user.configuration.m3u_sources.forEach((source) => {
+        html += `<li class="list-group-item"><small><code>${source}</code></small></li>`;
+    });
+    
+    html += `
+                </ul>
+            </div>
+            
+            <div class="mb-3">
+                <h6>Statistics</h6>
+                <div class="row">
+                    <div class="col-md-3">
+                        <div class="card text-center">
+                            <div class="card-body">
+                                <h3 class="card-title">${user.statistics.channel_count}</h3>
+                                <p class="card-text text-muted">Channels</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card text-center">
+                            <div class="card-body">
+                                <h3 class="card-title">${user.statistics.event_count}</h3>
+                                <p class="card-text text-muted">Events</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card text-center">
+                            <div class="card-body">
+                                <h3 class="card-title">${user.statistics.epg_channel_count}</h3>
+                                <p class="card-text text-muted">EPG Channels</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card text-center">
+                            <div class="card-body">
+                                <h3 class="card-title">${user.statistics.m3u_source_count}</h3>
+                                <p class="card-text text-muted">M3U Sources</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="mb-3">
+                <h6>Stremio Manifest URL</h6>
+                <div class="input-group">
+                    <input type="text" class="form-control" id="manifestUrl" value="${user.configuration.host_url}/${user.secret_str}/manifest.json" readonly>
+                    <button class="btn btn-outline-secondary" type="button" onclick="copyToClipboard('manifestUrl')">
+                        <i class="bi bi-clipboard"></i> Copy
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    // Add parse history section
+    html += `
+        <div class="table-container mb-3">
+            <h6>Parse History</h6>
+    `;
+    
+    if (user.parse_history && user.parse_history.length > 0) {
+        html += `
+            <div class="table-responsive">
+                <table class="table table-sm table-hover">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Status</th>
+                            <th>Channels</th>
+                            <th>Sources Processed</th>
+                            <th>Errors</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+        
+        user.parse_history.forEach(parse => {
+            const time = new Date(parse.timestamp).toLocaleString();
+            const statusBadge = parse.success 
+                ? '<span class="badge bg-success">Success</span>'
+                : '<span class="badge bg-danger">Failed</span>';
+            const errorCount = parse.error_count || 0;
+            const sourcesProcessed = parse.sources_processed || 0;
+            const sourcesFailed = parse.sources_failed || 0;
+            
+            html += `
+                <tr>
+                    <td>${time}</td>
+                    <td>${statusBadge}</td>
+                    <td>${parse.channel_count || 0}</td>
+                    <td>${sourcesProcessed} (${sourcesFailed} failed)</td>
+                    <td>${errorCount > 0 ? `<span class="text-danger fw-bold">${errorCount}</span>` : '<span class="text-muted">0</span>'}</td>
+                </tr>
+            `;
+        });
+        
+        html += `
+                    </tbody>
+                </table>
+            </div>
+        `;
+    } else {
+        html += '<p class="text-muted">No parse history available yet.</p>';
+    }
+    
+    html += `</div>`;
+    
+    // Add recent errors section
+    html += `
+        <div class="table-container mb-3">
+            <h6>Recent Errors</h6>
+    `;
+    
+    if (user.recent_errors && user.recent_errors.length > 0) {
+        html += `
+            <div class="table-responsive">
+                <table class="table table-sm table-hover">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Type</th>
+                            <th>Message</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+        
+        user.recent_errors.forEach(error => {
+            const time = new Date(error.timestamp).toLocaleString();
+            const errorType = error.error_type || 'error';
+            const message = error.message || '';
+            
+            html += `
+                <tr>
+                    <td><small>${time}</small></td>
+                    <td><span class="badge bg-warning">${errorType}</span></td>
+                    <td><small class="font-monospace">${message}</small></td>
+                </tr>
+            `;
+        });
+        
+        html += `
+                    </tbody>
+                </table>
+            </div>
+        `;
+    } else {
+        html += '<p class="text-muted">No recent errors.</p>';
+    }
+    
+    html += `</div>`;
+    
+    // Add logo overrides section
+    html += `
+        <div class="table-container mb-3">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h6>Logo Overrides</h6>
+                ${currentUser && currentUser.role !== 'viewer' ? `
+                    <button class="btn btn-sm btn-primary" onclick="showAddLogoOverrideModal('${user.secret_str}')">
+                        <i class="bi bi-plus-circle"></i> Add Override
+                    </button>
+                ` : ''}
+            </div>
+            <div id="logoOverridesContent">
+                <div class="loading">
+                    <div class="spinner-border text-primary" role="status"></div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    content.innerHTML = html;
+    
+    // Load logo overrides
+    loadLogoOverrides(user.secret_str);
+}
+
+// Load logo overrides for a user
+async function loadLogoOverrides(secretStr) {
+    currentLogoOverrideSecretStr = secretStr; // Store for use by selectChannelForOverride
+    const container = document.getElementById('logoOverridesContent');
+    if (!container) return;
+    
+    try {
+        const response = await apiFetch(`${API_BASE}/users/${secretStr}/logo-overrides`);
+        
+        if (response.ok) {
+            const data = await response.json();
+            displayLogoOverrides(secretStr, data.overrides || {}, data.available_channels || []);
+        } else {
+            container.innerHTML = '<p class="text-muted">Failed to load logo overrides</p>';
+        }
+    } catch (error) {
+        console.error('Error loading logo overrides:', error);
+        container.innerHTML = '<p class="text-muted">Error loading logo overrides</p>';
+    }
+}
+
+// Display logo overrides
+function displayLogoOverrides(secretStr, overrides, availableChannels) {
+    const container = document.getElementById('logoOverridesContent');
+    if (!container) return;
+    
+    // overrides is now an array, not an object
+    const overrideList = Array.isArray(overrides) ? overrides : Object.entries(overrides).map(([tvg_id, data]) => {
+        // Handle legacy format
+        if (typeof data === 'string') {
+            return { tvg_id, logo_url: data, is_regex: false };
+        }
+        return { tvg_id, ...data };
+    });
+    
+    let html = '';
+    
+    if (overrideList.length === 0) {
+        html = '<p class="text-muted mb-3">No logo overrides configured.</p>';
+    } else {
+        html = `
+            <div class="table-responsive mb-3">
+                <table class="table table-sm table-hover">
+                    <thead>
+                        <tr>
+                            <th>Channel ID / Pattern</th>
+                            <th>Channel Name</th>
+                            <th>Type</th>
+                            <th>Logo URL</th>
+                            <th>Preview</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+        
+        overrideList.forEach(override => {
+            const tvg_id = override.tvg_id;
+            const logo_url = override.logo_url || '';
+            const is_regex = override.is_regex || false;
+            
+            // Find channel name from available channels (only for exact matches)
+            const channel = availableChannels.find(c => c.tvg_id === tvg_id);
+            const channelName = channel ? channel.tvg_name : (is_regex ? '(Regex Pattern)' : tvg_id);
+            
+            // Escape single quotes in tvg_id for onclick handler
+            const escapedTvgId = tvg_id.replace(/'/g, "\\'");
+            
+            html += `
+                <tr>
+                    <td><code>${tvg_id}</code>${is_regex ? ' <span class="badge bg-info">REGEX</span>' : ''}</td>
+                    <td>${channelName}</td>
+                    <td>${is_regex ? '<span class="badge bg-info">Regex Pattern</span>' : '<span class="badge bg-secondary">Exact Match</span>'}</td>
+                    <td><small class="font-monospace">${logo_url.length > 50 ? logo_url.substring(0, 50) + '...' : logo_url}</small></td>
+                    <td><img src="${logo_url}" alt="Logo" style="max-height: 40px; max-width: 80px;" onerror="this.style.display='none'"></td>
+                    <td>
+                        ${currentUser && currentUser.role !== 'viewer' ? `
+                            <button class="btn btn-sm btn-outline-danger" onclick="deleteLogoOverride('${secretStr}', '${escapedTvgId}')">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        ` : ''}
+                    </td>
+                </tr>
+            `;
+        });
+        
+        html += `
+                    </tbody>
+                </table>
+            </div>
+        `;
+    }
+    
+    // Add channel selector helper
+    if (availableChannels.length > 0 && currentUser && currentUser.role !== 'viewer') {
+        html += `
+            <div class="mb-3">
+                <h6>Quick Add from Channel List</h6>
+                <div class="input-group mb-2">
+                    <select class="form-select" id="channelSelector">
+                        <option value="">Select a channel...</option>
+        `;
+        
+        availableChannels.forEach(channel => {
+            const selected = channel.has_override ? ' (has override)' : '';
+            html += `<option value="${channel.tvg_id}">${channel.tvg_name} (${channel.tvg_id})${selected}</option>`;
+        });
+        
+        html += `
+                    </select>
+                    <button class="btn btn-outline-secondary" type="button" onclick="selectChannelForOverride()">
+                        Use This Channel
+                    </button>
+                </div>
+            </div>
+        `;
+    }
+    
+    container.innerHTML = html;
+}
+
+// Select channel for override (populate modal form)
+function selectChannelForOverride() {
+    const selector = document.getElementById('channelSelector');
+    const tvgId = selector.value;
+    if (!tvgId) {
+        alert('Please select a channel first');
+        return;
+    }
+    
+    // Ensure we have a secretStr
+    if (!currentLogoOverrideSecretStr) {
+        alert('Error: User context not found. Please refresh the page.');
+        return;
+    }
+    
+    // Open the modal if not already open
+    const modalElement = document.getElementById('logoOverrideModal');
+    const modal = bootstrap.Modal.getInstance(modalElement);
+    if (!modal || !modal._isShown) {
+        showAddLogoOverrideModal(currentLogoOverrideSecretStr);
+    }
+    
+    // Populate the form fields
+    document.getElementById('overrideTvgId').value = tvgId;
+    document.getElementById('overrideIsRegex').checked = false; // Default to exact match when selecting from channel list
+    // Clear any previous URL and focus on URL field
+    document.getElementById('overrideLogoUrl').value = '';
+    document.getElementById('overrideLogoUrl').focus();
+}
+
+// Current secret_str for logo override operations
+let currentLogoOverrideSecretStr = null;
+
+// Show add logo override modal
+function showAddLogoOverrideModal(secretStr) {
+    currentLogoOverrideSecretStr = secretStr;
+    const modal = new bootstrap.Modal(document.getElementById('logoOverrideModal'));
+    document.getElementById('logoOverrideForm').reset();
+    document.getElementById('overrideIsRegex').checked = false;
+    document.getElementById('logoOverrideError').classList.add('hidden');
+    document.getElementById('logoOverrideSuccess').classList.add('hidden');
+    modal.show();
+}
+
+// Submit logo override
+function submitLogoOverride() {
+    const tvgId = document.getElementById('overrideTvgId').value.trim();
+    const logoUrl = document.getElementById('overrideLogoUrl').value.trim();
+    const isRegex = document.getElementById('overrideIsRegex').checked;
+    const errorDiv = document.getElementById('logoOverrideError');
+    const successDiv = document.getElementById('logoOverrideSuccess');
+    
+    errorDiv.classList.add('hidden');
+    successDiv.classList.remove('hidden');
+    
+    if (!tvgId || !logoUrl) {
+        errorDiv.textContent = 'Please fill in all fields';
+        errorDiv.classList.remove('hidden');
+        successDiv.classList.add('hidden');
+        return;
+    }
+    
+    // Validate regex if is_regex is checked
+    if (isRegex) {
+        try {
+            new RegExp(tvgId);
+        } catch (e) {
+            errorDiv.textContent = `Invalid regex pattern: ${e.message}`;
+            errorDiv.classList.remove('hidden');
+            successDiv.classList.add('hidden');
+            return;
+        }
+    }
+    
+    createLogoOverride(currentLogoOverrideSecretStr, tvgId, logoUrl, isRegex);
+}
+
+// Create logo override
+async function createLogoOverride(secretStr, tvgId, logoUrl, isRegex = false) {
+    const errorDiv = document.getElementById('logoOverrideError');
+    const successDiv = document.getElementById('logoOverrideSuccess');
+    
+    errorDiv.classList.add('hidden');
+    successDiv.classList.add('hidden');
+    
+    try {
+        const response = await apiFetch(`${API_BASE}/users/${secretStr}/logo-overrides`, {
+            method: 'POST',
+            body: JSON.stringify({
+                tvg_id: tvgId,
+                logo_url: logoUrl,
+                is_regex: isRegex
+            })
+        });
+        
+        if (response.ok) {
+            successDiv.textContent = 'Logo override created successfully!';
+            successDiv.classList.remove('hidden');
+            
+            // Close modal after a short delay
+            setTimeout(() => {
+                const modal = bootstrap.Modal.getInstance(document.getElementById('logoOverrideModal'));
+                if (modal) modal.hide();
+            }, 1500);
+            
+            // Reload logo overrides and user detail
+            loadLogoOverrides(secretStr);
+            setTimeout(() => loadUserDetail(secretStr), 500);
+        } else {
+            const error = await response.json();
+            errorDiv.textContent = error.detail || 'Failed to create logo override';
+            errorDiv.classList.remove('hidden');
+        }
+    } catch (error) {
+        console.error('Error creating logo override:', error);
+        errorDiv.textContent = 'Error creating logo override. Please try again.';
+        errorDiv.classList.remove('hidden');
+    }
+}
+
+// Delete logo override
+async function deleteLogoOverride(secretStr, tvgId) {
+    if (!confirm(`Delete logo override for channel "${tvgId}"?`)) {
+        return;
+    }
+    
+    try {
+        const response = await apiFetch(`${API_BASE}/users/${secretStr}/logo-overrides/${encodeURIComponent(tvgId)}`, {
+            method: 'DELETE'
+        });
+        
+        if (response.ok) {
+            alert('Logo override deleted successfully');
+            loadLogoOverrides(secretStr);
+            // Reload user detail to refresh
+            loadUserDetail(secretStr);
+        } else {
+            const error = await response.json();
+            alert(`Failed to delete logo override: ${error.detail || 'Unknown error'}`);
+        }
+    } catch (error) {
+        console.error('Error deleting logo override:', error);
+        alert('Error deleting logo override');
     }
 }
 
@@ -605,9 +1091,14 @@ async function triggerUserParse(secretStr) {
         });
         
         if (response.ok) {
-            alert('Parse triggered successfully');
+            alert('Parse triggered successfully. The page will refresh in a moment.');
+            // Reload user details after a short delay
+            setTimeout(() => {
+                loadUserDetail(secretStr);
+            }, 2000);
         } else {
-            alert('Failed to trigger parse');
+            const error = await response.json();
+            alert(`Failed to trigger parse: ${error.detail || 'Unknown error'}`);
         }
     } catch (error) {
         console.error('Error triggering parse:', error);
@@ -615,9 +1106,33 @@ async function triggerUserParse(secretStr) {
     }
 }
 
+// Clear user image cache
+async function clearUserCache(secretStr) {
+    if (!confirm(`Clear all cached images for this user? This will force regeneration of all images on next request.`)) {
+        return;
+    }
+    
+    try {
+        const response = await apiFetch(`${API_BASE}/users/${secretStr}/clear-image-cache`, {
+            method: 'POST'
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            alert(`Image cache cleared successfully!\nChannels processed: ${data.channels_processed}\nDeleted cache keys: ${data.deleted_keys}`);
+        } else {
+            const error = await response.json();
+            alert(`Failed to clear cache: ${error.detail || 'Unknown error'}`);
+        }
+    } catch (error) {
+        console.error('Error clearing cache:', error);
+        alert('Error clearing cache');
+    }
+}
+
 // Delete user
 async function deleteUser(secretStr) {
-    if (!confirm(`Are you sure you want to delete user ${secretStr.substring(0, 16)}...?`)) {
+    if (!confirm(`Are you sure you want to delete user ${secretStr.substring(0, 16)}...? This action cannot be undone.`)) {
         return;
     }
     
@@ -628,9 +1143,11 @@ async function deleteUser(secretStr) {
         
         if (response.ok) {
             alert('User deleted successfully');
-            loadUsers();
+            // Navigate back to users list
+            navigateToPage('users');
         } else {
-            alert('Failed to delete user');
+            const error = await response.json();
+            alert(`Failed to delete user: ${error.detail || 'Unknown error'}`);
         }
     } catch (error) {
         console.error('Error deleting user:', error);
@@ -813,13 +1330,16 @@ async function loadSettings() {
 }
 
 // Load channels
-async function loadChannels() {
+async function loadChannels(page = null) {
+    if (page !== null) {
+        currentChannelsPage = page;
+    }
     const container = document.getElementById('channelsTable');
     container.innerHTML = '<div class="spinner-border text-primary" role="status"></div>';
     
     try {
         const search = document.getElementById('channelSearch').value;
-        const response = await apiFetch(`${API_BASE}/channels?per_page=100${search ? `&search=${encodeURIComponent(search)}` : ''}`);
+        const response = await apiFetch(`${API_BASE}/channels?page=${currentChannelsPage}&per_page=100${search ? `&search=${encodeURIComponent(search)}` : ''}`);
         
         if (response.ok) {
             const data = await response.json();
@@ -895,17 +1415,20 @@ function displayChannels(channels, pagination) {
 
 // Load channels page
 function loadChannelsPage(page) {
-    loadChannels();
+    loadChannels(page);
 }
 
 // Load events
-async function loadEvents() {
+async function loadEvents(page = null) {
+    if (page !== null) {
+        currentEventsPage = page;
+    }
     const container = document.getElementById('eventsTable');
     container.innerHTML = '<div class="spinner-border text-primary" role="status"></div>';
     
     try {
         const search = document.getElementById('eventSearch').value;
-        const response = await apiFetch(`${API_BASE}/events?per_page=100${search ? `&search=${encodeURIComponent(search)}` : ''}`);
+        const response = await apiFetch(`${API_BASE}/events?page=${currentEventsPage}&per_page=100${search ? `&search=${encodeURIComponent(search)}` : ''}`);
         
         if (response.ok) {
             const data = await response.json();
@@ -985,7 +1508,7 @@ function displayEvents(events, pagination) {
 
 // Load events page
 function loadEventsPage(page) {
-    loadEvents();
+    loadEvents(page);
 }
 
 // Make functions globally available
@@ -995,3 +1518,8 @@ window.loadUsersPage = loadUsersPage;
 window.copyToClipboard = copyToClipboard;
 window.loadChannelsPage = loadChannelsPage;
 window.loadEventsPage = loadEventsPage;
+window.showAddLogoOverrideModal = showAddLogoOverrideModal;
+window.deleteLogoOverride = deleteLogoOverride;
+window.selectChannelForOverride = selectChannelForOverride;
+window.submitLogoOverride = submitLogoOverride;
+window.clearUserCache = clearUserCache;

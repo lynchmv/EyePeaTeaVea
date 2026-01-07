@@ -746,11 +746,16 @@ async def process_image(
         >>> isinstance(img, BytesIO)
         True
     """
-    # Cache key is based on tvg_id and image_type, not user-specific
+    # Cache key is based on tvg_id, image_type, and image_url (to handle logo overrides)
     # This allows sharing processed images across users since the same channel logo produces the same processed image
+    # Include image_url hash in cache key so logo overrides get their own cache entries
     # Include placeholder version for placeholder images to invalidate cache when generation changes
     is_placeholder = image_url == GENERIC_PLACEHOLDER_URL
-    cache_key = f"{tvg_id}_{image_type}"
+    import hashlib
+    # Create a short hash of the image URL to include in cache key (for logo overrides)
+    # This ensures that when logo override changes, cache is invalidated
+    image_url_hash = hashlib.md5(image_url.encode()).hexdigest()[:8]
+    cache_key = f"{tvg_id}_{image_type}_{image_url_hash}"
     if is_placeholder:
         cache_key = f"{cache_key}_placeholder_{PLACEHOLDER_CACHE_VERSION}"
     
@@ -778,6 +783,37 @@ async def process_image(
         processed_image = generate_placeholder_image(title, width, height, monochrome, image_type)
         redis_store.store_processed_image(placeholder_cache_key, processed_image.getvalue())
         return processed_image
+
+    # Check if content is SVG and convert to PNG
+    is_svg = False
+    if image_url.lower().endswith('.svg') or image_url.lower().endswith('.svgz'):
+        is_svg = True
+    elif content.startswith(b'<?xml') and b'<svg' in content[:1024]:
+        is_svg = True
+    elif content.startswith(b'<svg'):
+        is_svg = True
+    
+    if is_svg:
+        try:
+            # Try to import cairosvg for SVG conversion
+            try:
+                import cairosvg
+            except ImportError:
+                logger.warning(f"SVG image detected for {tvg_id} but cairosvg is not installed. Install it with: pip install cairosvg")
+                raise UnidentifiedImageError("SVG format not supported without cairosvg")
+            
+            logger.info(f"Converting SVG to PNG for {tvg_id} ({image_type}, {width}x{height})")
+            # Convert SVG to PNG at the target size
+            png_data = cairosvg.svg2png(
+                bytestring=content,
+                output_width=width,
+                output_height=height
+            )
+            content = png_data
+            logger.debug(f"Successfully converted SVG to PNG for {tvg_id}: {len(content)} bytes")
+        except Exception as e:
+            logger.warning(f"Failed to convert SVG to PNG for {tvg_id}: {e}")
+            raise UnidentifiedImageError(f"SVG conversion failed: {e}")
 
     try:
         # Suppress PIL warning about palette images with transparency - we handle it correctly
