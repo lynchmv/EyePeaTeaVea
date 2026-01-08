@@ -1077,6 +1077,159 @@ async def clear_channel_cache(
     except Exception as e:
         logger.error(f"Error clearing cache for channel {tvg_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to clear cache: {str(e)}")
+
+@admin_router.get("/users/{secret_str}/logo-overrides/export")
+async def export_logo_overrides(
+    secret_str: str,
+    session: AdminSession = Depends(require_viewer())
+):
+    """Export all logo overrides for a user as JSON."""
+    user_data = redis_store.get_user_data(secret_str)
+    if not user_data:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    overrides_dict = redis_store.get_all_logo_overrides(secret_str)
+    
+    # Convert to list format for export
+    overrides_list = []
+    for tvg_id, override_info in overrides_dict.items():
+        overrides_list.append({
+            "tvg_id": tvg_id,
+            "logo_url": override_info.get("logo_url", ""),
+            "is_regex": override_info.get("is_regex", False)
+        })
+    
+    log_admin_action(
+        redis_store,
+        session.username,
+        "logo_overrides_exported",
+        resource=f"user:{secret_str}",
+        details={"count": len(overrides_list)}
+    )
+    
+    return {
+        "overrides": overrides_list,
+        "count": len(overrides_list),
+        "export_format_version": "1.0"
+    }
+
+@admin_router.post("/users/{secret_str}/logo-overrides/import")
+async def import_logo_overrides(
+    secret_str: str,
+    import_data: dict,
+    session: AdminSession = Depends(require_admin())
+):
+    """Import logo overrides from JSON format."""
+    user_data = redis_store.get_user_data(secret_str)
+    if not user_data:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Handle different import formats
+    overrides_list = []
+    if "overrides" in import_data:
+        overrides_list = import_data["overrides"]
+    elif isinstance(import_data, list):
+        overrides_list = import_data
+    else:
+        raise HTTPException(status_code=400, detail="Invalid import format. Expected 'overrides' array or array of override objects.")
+    
+    if not isinstance(overrides_list, list):
+        raise HTTPException(status_code=400, detail="Invalid import format. 'overrides' must be an array.")
+    
+    imported_count = 0
+    updated_count = 0
+    error_count = 0
+    errors = []
+    
+    for idx, override_item in enumerate(overrides_list):
+        try:
+            if not isinstance(override_item, dict):
+                errors.append(f"Item {idx + 1}: Expected object, got {type(override_item).__name__}")
+                error_count += 1
+                continue
+            
+            tvg_id = override_item.get("tvg_id")
+            logo_url = override_item.get("logo_url")
+            is_regex = override_item.get("is_regex", False)
+            
+            if not tvg_id or not logo_url:
+                errors.append(f"Item {idx + 1}: Missing required fields (tvg_id, logo_url)")
+                error_count += 1
+                continue
+            
+            # Validate regex pattern if is_regex is True
+            if is_regex:
+                try:
+                    re.compile(tvg_id)
+                except re.error as e:
+                    errors.append(f"Item {idx + 1} ({tvg_id}): Invalid regex pattern: {e}")
+                    error_count += 1
+                    continue
+            
+            # Check if override already exists
+            existing_override = redis_store.get_logo_override(secret_str, tvg_id)
+            if existing_override:
+                updated_count += 1
+            else:
+                imported_count += 1
+            
+            # Store the override
+            redis_store.store_logo_override(secret_str, tvg_id, logo_url, is_regex)
+            
+        except Exception as e:
+            errors.append(f"Item {idx + 1}: {str(e)}")
+            error_count += 1
+            logger.error(f"Error importing logo override item {idx + 1}: {e}")
+    
+    # Invalidate cache for all imported/updated channels
+    if imported_count > 0 or updated_count > 0:
+        try:
+            all_channels = redis_store.get_all_channels(secret_str)
+            image_types = ["poster", "background", "logo", "icon"]
+            deleted_count = 0
+            
+            # Get all tvg_ids from imported overrides
+            imported_tvg_ids = [item.get("tvg_id") for item in overrides_list if isinstance(item, dict) and item.get("tvg_id")]
+            
+            for tvg_id in imported_tvg_ids:
+                for image_type in image_types:
+                    cache_key = f"{tvg_id}_{image_type}"
+                    redis_key = f"processed_image:{cache_key}"
+                    result = redis_store.redis_client.delete(redis_key)
+                    if result > 0:
+                        deleted_count += result
+                    
+                    pattern = f"processed_image:{cache_key}_placeholder_*"
+                    placeholder_keys = list(redis_store.redis_client.scan_iter(match=pattern))
+                    if placeholder_keys:
+                        result = redis_store.redis_client.delete(*placeholder_keys)
+                        deleted_count += result
+            
+            logger.info(f"Invalidated {deleted_count} cached image(s) after importing {imported_count + updated_count} logo override(s)")
+        except Exception as e:
+            logger.warning(f"Could not invalidate image cache after import: {e}")
+    
+    log_admin_action(
+        redis_store,
+        session.username,
+        "logo_overrides_imported",
+        resource=f"user:{secret_str}",
+        details={
+            "imported": imported_count,
+            "updated": updated_count,
+            "errors": error_count,
+            "total": len(overrides_list)
+        }
+    )
+    
+    return {
+        "message": "Logo overrides import completed",
+        "imported": imported_count,
+        "updated": updated_count,
+        "errors": error_count,
+        "total": len(overrides_list),
+        "error_details": errors if errors else None
+    }
     
     # Invalidate image cache for this channel
     try:

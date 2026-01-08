@@ -3,6 +3,54 @@
 const API_BASE = '/admin';
 const ASSETS_BASE = '/admin-assets';
 
+// Notification system using Bootstrap toasts
+function showNotification(message, type = 'info', duration = 5000) {
+    const toastContainer = document.getElementById('toastContainer');
+    if (!toastContainer) {
+        // Fallback to console if toast container doesn't exist
+        console.log(`[${type.toUpperCase()}] ${message}`);
+        return;
+    }
+    
+    const toastId = `toast-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const bgClass = {
+        'success': 'bg-success',
+        'error': 'bg-danger',
+        'warning': 'bg-warning',
+        'info': 'bg-info'
+    }[type] || 'bg-info';
+    
+    const icon = {
+        'success': 'bi-check-circle-fill',
+        'error': 'bi-exclamation-triangle-fill',
+        'warning': 'bi-exclamation-triangle-fill',
+        'info': 'bi-info-circle-fill'
+    }[type] || 'bi-info-circle-fill';
+    
+    const toastHTML = `
+        <div id="${toastId}" class="toast" role="alert" aria-live="assertive" aria-atomic="true" data-bs-autohide="true" data-bs-delay="${duration}">
+            <div class="toast-header ${bgClass} text-white">
+                <i class="bi ${icon} me-2"></i>
+                <strong class="me-auto">${type.charAt(0).toUpperCase() + type.slice(1)}</strong>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+            <div class="toast-body">
+                ${message.replace(/\n/g, '<br>')}
+            </div>
+        </div>
+    `;
+    
+    toastContainer.insertAdjacentHTML('beforeend', toastHTML);
+    const toastElement = document.getElementById(toastId);
+    const toast = new bootstrap.Toast(toastElement);
+    toast.show();
+    
+    // Remove toast element after it's hidden
+    toastElement.addEventListener('hidden.bs.toast', () => {
+        toastElement.remove();
+    });
+}
+
 // Helper function for API fetch requests
 async function apiFetch(url, options = {}) {
     const defaultOptions = {
@@ -211,7 +259,7 @@ function navigateToPage(page, updateHistory = true) {
     
     // Update URL without hash using History API
     if (updateHistory) {
-        const newUrl = `/admin/${page === 'dashboard' ? '' : page}`;
+        const newUrl = `/dashboard/${page === 'dashboard' ? '' : page}`;
         window.history.pushState({ page }, '', newUrl);
     }
     
@@ -276,19 +324,19 @@ window.addEventListener('popstate', (event) => {
 // Get page from current path
 function getPageFromPath() {
     const path = window.location.pathname;
-    if (path === '/admin' || path === '/admin/') {
+    if (path === '/dashboard' || path === '/dashboard/') {
         return 'dashboard';
     }
     
-    // Check if it's a user detail page (e.g., /admin/users/{secret_str})
-    const userDetailMatch = path.match(/^\/admin\/users\/(.+)$/);
+    // Check if it's a user detail page (e.g., /dashboard/users/{secret_str})
+    const userDetailMatch = path.match(/^\/dashboard\/users\/(.+)$/);
     if (userDetailMatch) {
         const secretStr = userDetailMatch[1];
         navigateToUserDetail(secretStr);
         return 'userDetail';
     }
     
-    const match = path.match(/^\/admin\/([^/]+)/);
+    const match = path.match(/^\/dashboard\/([^/]+)/);
     if (match) {
         const page = match[1];
         // Validate page exists
@@ -297,6 +345,12 @@ function getPageFromPath() {
             return page;
         }
     }
+    
+    // Fallback: check if it's /admin (for backwards compatibility)
+    if (path === '/admin' || path === '/admin/') {
+        return 'dashboard';
+    }
+    
     return 'dashboard';
 }
 
@@ -504,7 +558,7 @@ function loadUsersPage(page) {
 // View user details - navigate to user detail page
 function viewUser(secretStr) {
     // Navigate to user detail page with secret_str in URL
-    const newUrl = `/admin/users/${secretStr}`;
+    const newUrl = `/dashboard/users/${secretStr}`;
     window.history.pushState({ page: 'userDetail', secretStr: secretStr }, '', newUrl);
     navigateToUserDetail(secretStr);
 }
@@ -829,10 +883,31 @@ function displayLogoOverrides(secretStr, overrides, availableChannels) {
     
     let html = '';
     
-    if (overrideList.length === 0) {
-        html = '<p class="text-muted mb-3">No logo overrides configured.</p>';
+    // Add export/import buttons if user has admin permissions
+    // Check currentUser or try to get it from the page context
+    const userRole = currentUser ? currentUser.role : null;
+    if (userRole && userRole !== 'viewer') {
+        html += `
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h6>Logo Overrides</h6>
+                <div>
+                    <button class="btn btn-sm btn-outline-primary me-2" onclick="exportLogoOverrides('${secretStr}')">
+                        <i class="bi bi-download"></i> Export
+                    </button>
+                    <button class="btn btn-sm btn-outline-success" onclick="showImportLogoOverridesModal('${secretStr}')">
+                        <i class="bi bi-upload"></i> Import
+                    </button>
+                </div>
+            </div>
+        `;
     } else {
-        html = `
+        html += '<h6>Logo Overrides</h6>';
+    }
+    
+    if (overrideList.length === 0) {
+        html += '<p class="text-muted mb-3">No logo overrides configured.</p>';
+    } else {
+        html += `
             <div class="table-responsive mb-3">
                 <table class="table table-sm table-hover">
                     <thead>
@@ -918,13 +993,13 @@ function selectChannelForOverride() {
     const selector = document.getElementById('channelSelector');
     const tvgId = selector.value;
     if (!tvgId) {
-        alert('Please select a channel first');
+        showNotification('Please select a channel first', 'warning');
         return;
     }
     
     // Ensure we have a secretStr
     if (!currentLogoOverrideSecretStr) {
-        alert('Error: User context not found. Please refresh the page.');
+        showNotification('Error: User context not found. Please refresh the page.', 'error');
         return;
     }
     
@@ -1045,17 +1120,17 @@ async function deleteLogoOverride(secretStr, tvgId) {
         });
         
         if (response.ok) {
-            alert('Logo override deleted successfully');
+            showNotification('Logo override deleted successfully', 'success');
             loadLogoOverrides(secretStr);
             // Reload user detail to refresh
             loadUserDetail(secretStr);
         } else {
             const error = await response.json();
-            alert(`Failed to delete logo override: ${error.detail || 'Unknown error'}`);
+            showNotification(`Failed to delete logo override: ${error.detail || 'Unknown error'}`, 'error');
         }
     } catch (error) {
         console.error('Error deleting logo override:', error);
-        alert('Error deleting logo override');
+        showNotification('Error deleting logo override', 'error');
     }
 }
 
@@ -1091,18 +1166,135 @@ async function triggerUserParse(secretStr) {
         });
         
         if (response.ok) {
-            alert('Parse triggered successfully. The page will refresh in a moment.');
+            showNotification('Parse triggered successfully. The page will refresh in a moment.', 'success');
             // Reload user details after a short delay
             setTimeout(() => {
                 loadUserDetail(secretStr);
             }, 2000);
         } else {
             const error = await response.json();
-            alert(`Failed to trigger parse: ${error.detail || 'Unknown error'}`);
+            showNotification(`Failed to trigger parse: ${error.detail || 'Unknown error'}`, 'error');
         }
     } catch (error) {
         console.error('Error triggering parse:', error);
-        alert('Error triggering parse');
+        showNotification('Error triggering parse', 'error');
+    }
+}
+
+// Export logo overrides
+async function exportLogoOverrides(secretStr) {
+    try {
+        const response = await apiFetch(`${API_BASE}/users/${secretStr}/logo-overrides/export`);
+        
+        if (response.ok) {
+            const data = await response.json();
+            
+            // Create a blob and download it
+            const jsonStr = JSON.stringify(data, null, 2);
+            const blob = new Blob([jsonStr], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `logo-overrides-${secretStr.substring(0, 8)}-${new Date().toISOString().split('T')[0]}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            showNotification(`Exported ${data.count} logo override(s) successfully!`, 'success');
+        } else {
+            const error = await response.json();
+            showNotification(`Failed to export logo overrides: ${error.detail || 'Unknown error'}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error exporting logo overrides:', error);
+        showNotification('Error exporting logo overrides', 'error');
+    }
+}
+
+// Show import logo overrides modal
+function showImportLogoOverridesModal(secretStr) {
+    currentLogoOverrideSecretStr = secretStr;
+    const modal = new bootstrap.Modal(document.getElementById('importLogoOverridesModal'));
+    document.getElementById('importLogoOverridesForm').reset();
+    document.getElementById('importLogoOverridesError').classList.add('hidden');
+    document.getElementById('importLogoOverridesSuccess').classList.add('hidden');
+    modal.show();
+}
+
+// Submit import logo overrides
+async function submitImportLogoOverrides() {
+    const fileInput = document.getElementById('importLogoOverridesFile');
+    const textArea = document.getElementById('importLogoOverridesText');
+    const errorDiv = document.getElementById('importLogoOverridesError');
+    const successDiv = document.getElementById('importLogoOverridesSuccess');
+    
+    errorDiv.classList.add('hidden');
+    successDiv.classList.add('hidden');
+    
+    let importData = null;
+    
+    // Check if file was uploaded
+    if (fileInput.files && fileInput.files.length > 0) {
+        const file = fileInput.files[0];
+        try {
+            const text = await file.text();
+            importData = JSON.parse(text);
+        } catch (e) {
+            errorDiv.textContent = `Error reading file: ${e.message}`;
+            errorDiv.classList.remove('hidden');
+            return;
+        }
+    } else if (textArea.value.trim()) {
+        // Use text area content
+        try {
+            importData = JSON.parse(textArea.value.trim());
+        } catch (e) {
+            errorDiv.textContent = `Invalid JSON: ${e.message}`;
+            errorDiv.classList.remove('hidden');
+            return;
+        }
+    } else {
+        errorDiv.textContent = 'Please provide a JSON file or paste JSON content';
+        errorDiv.classList.remove('hidden');
+        return;
+    }
+    
+    if (!importData) {
+        errorDiv.textContent = 'No import data provided';
+        errorDiv.classList.remove('hidden');
+        return;
+    }
+    
+    try {
+        const response = await apiFetch(`${API_BASE}/users/${currentLogoOverrideSecretStr}/logo-overrides/import`, {
+            method: 'POST',
+            body: JSON.stringify(importData)
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            let message = `Import completed!<br>Imported: ${data.imported}<br>Updated: ${data.updated}<br>Errors: ${data.errors}`;
+            if (data.error_details && data.error_details.length > 0) {
+                const errorList = data.error_details.slice(0, 5).join('<br>') + (data.error_details.length > 5 ? `<br>... and ${data.error_details.length - 5} more` : '');
+                message += `<br><br><strong>Errors:</strong><br><small>${errorList}</small>`;
+            }
+            showNotification(message, data.errors > 0 ? 'warning' : 'success', 8000);
+            
+            // Close modal and reload logo overrides
+            const modal = bootstrap.Modal.getInstance(document.getElementById('importLogoOverridesModal'));
+            modal.hide();
+            loadLogoOverrides(currentLogoOverrideSecretStr);
+            loadUserDetail(currentLogoOverrideSecretStr);
+        } else {
+            const error = await response.json();
+            errorDiv.textContent = error.detail || 'Failed to import logo overrides';
+            errorDiv.classList.remove('hidden');
+        }
+    } catch (error) {
+        console.error('Error importing logo overrides:', error);
+        errorDiv.textContent = 'Error importing logo overrides. Please try again.';
+        errorDiv.classList.remove('hidden');
     }
 }
 
@@ -1119,14 +1311,14 @@ async function clearUserCache(secretStr) {
         
         if (response.ok) {
             const data = await response.json();
-            alert(`Image cache cleared successfully!\nChannels processed: ${data.channels_processed}\nDeleted cache keys: ${data.deleted_keys}`);
+            showNotification(`Image cache cleared successfully!<br>Channels processed: ${data.channels_processed}<br>Deleted cache keys: ${data.deleted_keys}`, 'success');
         } else {
             const error = await response.json();
-            alert(`Failed to clear cache: ${error.detail || 'Unknown error'}`);
+            showNotification(`Failed to clear cache: ${error.detail || 'Unknown error'}`, 'error');
         }
     } catch (error) {
         console.error('Error clearing cache:', error);
-        alert('Error clearing cache');
+        showNotification('Error clearing cache', 'error');
     }
 }
 
@@ -1142,16 +1334,16 @@ async function deleteUser(secretStr) {
         });
         
         if (response.ok) {
-            alert('User deleted successfully');
+            showNotification('User deleted successfully', 'success');
             // Navigate back to users list
             navigateToPage('users');
         } else {
             const error = await response.json();
-            alert(`Failed to delete user: ${error.detail || 'Unknown error'}`);
+            showNotification(`Failed to delete user: ${error.detail || 'Unknown error'}`, 'error');
         }
     } catch (error) {
         console.error('Error deleting user:', error);
-        alert('Error deleting user');
+        showNotification('Error deleting user', 'error');
     }
 }
 
@@ -1523,3 +1715,6 @@ window.deleteLogoOverride = deleteLogoOverride;
 window.selectChannelForOverride = selectChannelForOverride;
 window.submitLogoOverride = submitLogoOverride;
 window.clearUserCache = clearUserCache;
+window.exportLogoOverrides = exportLogoOverrides;
+window.showImportLogoOverridesModal = showImportLogoOverridesModal;
+window.submitImportLogoOverrides = submitImportLogoOverrides;

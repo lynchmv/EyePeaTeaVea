@@ -276,6 +276,103 @@ def _create_gradient_background(
     
     return img
 
+def _extract_dominant_color(image: Image.Image, sample_size: int = 100) -> tuple[int, int, int]:
+    """
+    Extract the dominant color from an image.
+    
+    Uses a sampling approach for performance - resizes image to small size,
+    then finds the most common color. This is much faster than analyzing
+    every pixel in a large image.
+    
+    Args:
+        image: PIL Image object
+        sample_size: Size to resize image to for color extraction (default: 100px)
+        
+    Returns:
+        RGB tuple of the dominant color
+    """
+    try:
+        # Convert to RGB if needed
+        if image.mode != 'RGB':
+            if image.mode == 'RGBA':
+                # Create white background for transparent images
+                bg = Image.new('RGB', image.size, (255, 255, 255))
+                bg.paste(image, mask=image.split()[3] if image.mode == 'RGBA' else None)
+                image = bg
+            else:
+                image = image.convert('RGB')
+        
+        # Resize to small size for faster processing
+        small_image = image.resize((sample_size, sample_size), Image.Resampling.LANCZOS)
+        
+        # Get colors - use quantize to reduce to most common colors
+        quantized = small_image.quantize(colors=16, method=Image.Quantize.MEDIANCUT)
+        palette = quantized.getpalette()
+        
+        # Count color frequencies
+        color_counts = {}
+        pixels = list(quantized.getdata())
+        for pixel_value in pixels:
+            if pixel_value < len(palette) // 3:
+                r = palette[pixel_value * 3]
+                g = palette[pixel_value * 3 + 1]
+                b = palette[pixel_value * 3 + 2]
+                # Skip very dark colors (likely background/transparency artifacts)
+                if r + g + b > 30:  # Skip near-black colors
+                    color_counts[(r, g, b)] = color_counts.get((r, g, b), 0) + 1
+        
+        if not color_counts:
+            # Fallback: use average color
+            pixels_rgb = list(small_image.getdata())
+            if pixels_rgb:
+                avg_r = sum(p[0] for p in pixels_rgb) // len(pixels_rgb)
+                avg_g = sum(p[1] for p in pixels_rgb) // len(pixels_rgb)
+                avg_b = sum(p[2] for p in pixels_rgb) // len(pixels_rgb)
+                return (avg_r, avg_g, avg_b)
+            return (0, 0, 0)  # Black fallback
+        
+        # Return the most common color
+        dominant_color = max(color_counts.items(), key=lambda x: x[1])[0]
+        return dominant_color
+    except Exception as e:
+        logger.warning(f"Error extracting dominant color: {e}")
+        return (0, 0, 0)  # Black fallback
+
+def _mute_color(rgb: tuple[int, int, int], saturation_factor: float = 0.3, lightness_adjust: float = 0.2) -> tuple[int, int, int]:
+    """
+    Create a muted version of a color by reducing saturation and adjusting lightness.
+    
+    Args:
+        rgb: RGB tuple (0-255)
+        saturation_factor: How much to reduce saturation (0.0 = grayscale, 1.0 = original)
+        lightness_adjust: How much to adjust lightness (-1.0 = black, 0.0 = no change, 1.0 = white)
+        
+    Returns:
+        Muted RGB tuple
+    """
+    try:
+        # Convert RGB to HSL
+        r, g, b = [x / 255.0 for x in rgb]
+        h, l, s = colorsys.rgb_to_hls(r, g, b)
+        
+        # Reduce saturation
+        s = s * saturation_factor
+        
+        # Adjust lightness (make it darker/more muted)
+        # Move towards middle gray (0.5 lightness) for a muted look
+        target_lightness = 0.15  # Dark muted background
+        l = l * (1 - lightness_adjust) + target_lightness * lightness_adjust
+        
+        # Ensure lightness is reasonable (not too dark or too light)
+        l = max(0.1, min(0.3, l))  # Keep between 10% and 30% lightness
+        
+        # Convert back to RGB
+        r, g, b = colorsys.hls_to_rgb(h, l, s)
+        return (int(r * 255), int(g * 255), int(b * 255))
+    except Exception as e:
+        logger.warning(f"Error muting color {rgb}: {e}")
+        return (20, 20, 20)  # Dark gray fallback
+
 def _wrap_text(text: str, font: ImageFont.FreeTypeFont | ImageFont.ImageFont, max_width: int) -> list[str]:
     """
     Wrap text to fit within max_width.
@@ -823,6 +920,31 @@ async def process_image(
         
         logger.debug(f"Processing image for {tvg_id}: mode={original_image.mode}, size={original_image.size}")
         
+        # Extract dominant color early (before processing) for background color
+        # Only for non-monochrome images with actual logos (not placeholders)
+        bg_color = (0, 0, 0)  # Default black background
+        if not monochrome and image_url != GENERIC_PLACEHOLDER_URL:
+            try:
+                # Extract color from original image before any processing
+                # Create a temporary RGB version for color extraction if needed
+                temp_image = original_image
+                if temp_image.mode == 'RGBA':
+                    # Extract color from non-transparent areas only
+                    # Create a white background temporarily for color extraction
+                    temp_bg = Image.new('RGB', temp_image.size, (255, 255, 255))
+                    temp_bg.paste(temp_image, mask=temp_image.split()[3])
+                    temp_image = temp_bg
+                elif temp_image.mode not in ('RGB', 'RGBA'):
+                    temp_image = temp_image.convert('RGB')
+                
+                dominant_color = _extract_dominant_color(temp_image)
+                # Create a muted version for the background
+                bg_color = _mute_color(dominant_color, saturation_factor=0.25, lightness_adjust=0.3)
+                logger.debug(f"Extracted dominant color {dominant_color} for {tvg_id}, using muted background {bg_color}")
+            except Exception as e:
+                logger.debug(f"Could not extract color for {tvg_id}, using black background: {e}")
+                bg_color = (0, 0, 0)
+        
         # Handle different image modes and transparency
         # Convert palette mode images with transparency to RGBA immediately to avoid warnings
         if original_image.mode == 'P':
@@ -855,9 +977,7 @@ async def process_image(
         else:
             # Convert to RGB, handling transparency
             if has_alpha:
-                # Use black background for all image types to ensure white text/elements are visible
-                bg_color = (0, 0, 0)  # Black background
-                
+                # Use extracted muted color as background (or black if extraction failed)
                 bg = Image.new('RGB', original_image.size, bg_color)
                 if original_image.mode == 'RGBA':
                     bg.paste(original_image, mask=original_image.split()[3])  # Use alpha channel as mask
@@ -877,15 +997,27 @@ async def process_image(
         new_width = int(original_width * ratio)
         new_height = int(original_height * ratio)
 
+        # Extract dominant color from original image for background (before resizing for performance)
+        # Only extract color for non-monochrome images and when we have an actual logo (not placeholder)
+        bg_color = (0, 0, 0)  # Default black background
+        if not monochrome and image_url != GENERIC_PLACEHOLDER_URL:
+            try:
+                # Extract dominant color from the original image
+                dominant_color = _extract_dominant_color(original_image)
+                # Create a muted version for the background
+                bg_color = _mute_color(dominant_color, saturation_factor=0.25, lightness_adjust=0.3)
+                logger.debug(f"Extracted dominant color {dominant_color} for {tvg_id}, using muted background {bg_color}")
+            except Exception as e:
+                logger.debug(f"Could not extract color for {tvg_id}, using black background: {e}")
+                bg_color = (0, 0, 0)
+
         # Resize with high-quality resampling
         resized_image = original_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
         logger.debug(f"Resized {tvg_id} from {original_width}x{original_height} to {new_width}x{new_height}, mode={resized_image.mode}")
 
-        # Create black background for all image types to ensure white text/elements are visible
-        bg_color = (0, 0, 0)  # Black background for all types
-        
+        # Create background with extracted/muted color
         if monochrome:
-            background = Image.new('L', (width, height), 0)  # Black for monochrome too
+            background = Image.new('L', (width, height), 0)  # Black for monochrome
         else:
             background = Image.new('RGB', (width, height), bg_color)
 

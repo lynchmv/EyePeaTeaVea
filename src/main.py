@@ -153,66 +153,54 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # This ensures API routes are available before frontend routes
 app.include_router(admin_router)
 
-# Admin frontend page routes - serve HTML for browser navigation
-# These routes are defined AFTER the router, so they take precedence for browser navigation
-# API calls (with Accept: application/json) will be handled by the router above
-@app.get("/admin/")
-async def admin_dashboard(request: Request):
-    """Serve admin dashboard HTML or let API route handle it."""
-    if "application/json" in request.headers.get("accept", ""):
-        raise HTTPException(status_code=404)  # Let router handle API calls
+# Admin frontend page routes - serve HTML for browser navigation at /dashboard/*
+# API routes remain at /admin/* to avoid conflicts
+@app.get("/dashboard/")
+async def admin_dashboard():
+    """Serve admin dashboard HTML."""
     return FileResponse('admin/index.html')
 
-@app.get("/admin/users")
-async def admin_users_page(request: Request):
-    """Serve admin dashboard HTML or let API route handle it."""
-    if "application/json" in request.headers.get("accept", ""):
-        raise HTTPException(status_code=404)  # Let router handle API calls
+@app.get("/dashboard/users")
+async def admin_users_page():
+    """Serve admin dashboard HTML."""
     return FileResponse('admin/index.html')
 
-@app.get("/admin/users/{secret_str}")
-async def admin_user_detail_page(request: Request, secret_str: str):
+@app.get("/dashboard/users/{secret_str}")
+async def admin_user_detail_page(secret_str: str):
     """Serve admin dashboard HTML for user detail page."""
-    # Check if this is an API request (has Accept: application/json)
-    # API calls will hit the router's /admin/users/{secret_str} route (defined above)
-    if "application/json" in request.headers.get("accept", ""):
-        raise HTTPException(status_code=404)  # Let router handle API calls
     return FileResponse('admin/index.html')
 
-@app.get("/admin/channels")
-async def admin_channels_page(request: Request):
-    """Serve admin dashboard HTML or let API route handle it."""
-    if "application/json" in request.headers.get("accept", ""):
-        raise HTTPException(status_code=404)  # Let router handle API calls
+@app.get("/dashboard/channels")
+async def admin_channels_page():
+    """Serve admin dashboard HTML."""
     return FileResponse('admin/index.html')
 
-@app.get("/admin/events")
-async def admin_events_page(request: Request):
-    """Serve admin dashboard HTML or let API route handle it."""
-    if "application/json" in request.headers.get("accept", ""):
-        raise HTTPException(status_code=404)  # Let router handle API calls
+@app.get("/dashboard/events")
+async def admin_events_page():
+    """Serve admin dashboard HTML."""
     return FileResponse('admin/index.html')
 
-@app.get("/admin/system")
-async def admin_system_page(request: Request):
-    """Serve admin dashboard HTML or let API route handle it."""
-    if "application/json" in request.headers.get("accept", ""):
-        raise HTTPException(status_code=404)  # Let router handle API calls
+@app.get("/dashboard/system")
+async def admin_system_page():
+    """Serve admin dashboard HTML."""
     return FileResponse('admin/index.html')
 
-@app.get("/admin/logs")
-async def admin_logs_page(request: Request):
-    """Serve admin dashboard HTML or let API route handle it."""
-    if "application/json" in request.headers.get("accept", ""):
-        raise HTTPException(status_code=404)  # Let router handle API calls
+@app.get("/dashboard/logs")
+async def admin_logs_page():
+    """Serve admin dashboard HTML."""
     return FileResponse('admin/index.html')
 
-@app.get("/admin/settings")
-async def admin_settings_page(request: Request):
-    """Serve admin dashboard HTML or let API route handle it."""
-    if "application/json" in request.headers.get("accept", ""):
-        raise HTTPException(status_code=404)  # Let router handle API calls
+@app.get("/dashboard/settings")
+async def admin_settings_page():
+    """Serve admin dashboard HTML."""
     return FileResponse('admin/index.html')
+
+# Redirect /admin/ to /dashboard/ for backwards compatibility
+@app.get("/admin/")
+async def admin_redirect():
+    """Redirect /admin/ to /dashboard/ for backwards compatibility."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/dashboard/", status_code=301)
 
 # Mount admin static assets (JS, CSS, etc.) at /admin-assets to avoid conflicts
 app.mount("/admin-assets", StaticFiles(directory="admin"), name="admin-assets")
