@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from typing import Any
 import pytz
 import redis
+from redis.connection import ConnectionPool
 from redis.exceptions import ConnectionError, RedisError
 from .models import UserData
 
@@ -23,6 +24,13 @@ logger = logging.getLogger(__name__)
 REDIS_BATCH_SIZE = 1000  # Batch size for bulk operations
 IMAGE_CACHE_EXPIRATION_SECONDS = 60 * 60 * 24 * 7  # 7 days
 EVENT_EXPIRATION_HOURS = 4  # Hours after event time before expiration
+
+# Redis connection pool settings for high concurrency
+REDIS_MAX_CONNECTIONS = 50  # Maximum connections in pool
+REDIS_RETRY_ON_TIMEOUT = True  # Retry operations on timeout
+REDIS_SOCKET_KEEPALIVE = True  # Enable TCP keepalive
+REDIS_SOCKET_KEEPALIVE_OPTIONS = {}  # Keepalive options
+REDIS_HEALTH_CHECK_INTERVAL = 30  # Health check interval in seconds
 
 class RedisConnectionError(Exception):
     """
@@ -47,12 +55,14 @@ class RedisStore:
     - Connection health checks
     - Batch operations for performance
     - Graceful error handling
+    - Connection pooling for high concurrency
     
     Attributes:
         redis_url: Redis connection URL
         max_retries: Maximum connection retry attempts
         retry_delay: Delay between retry attempts in seconds
         redis_client: Redis client instance (None if not connected)
+        connection_pool: Redis connection pool for concurrent operations
     """
     def __init__(
         self, 
@@ -61,7 +71,7 @@ class RedisStore:
         retry_delay: float = 1.0
     ) -> None:
         """
-        Initialize Redis connection with retry logic.
+        Initialize Redis connection with retry logic and connection pooling.
         
         Args:
             redis_url: Redis connection URL (e.g., "redis://localhost:6379/0")
@@ -72,28 +82,45 @@ class RedisStore:
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.redis_client = None
+        self.connection_pool = None
         self._connect_with_retry()
     
     def _connect_with_retry(self) -> None:
         """
-        Attempt to connect to Redis with retry logic.
+        Attempt to connect to Redis with retry logic and connection pooling.
         
-        Tries to establish a connection up to max_retries times.
+        Creates a connection pool for high concurrency and reuses connections
+        across multiple requests. Tries to establish a connection up to max_retries times.
         Sets redis_client to None if all attempts fail.
         """
         for attempt in range(1, self.max_retries + 1):
             try:
-                # Enable connection pooling for better performance
-                self.redis_client = redis.from_url(
+                # Create connection pool for high concurrency
+                # This allows multiple concurrent requests to share connections efficiently
+                self.connection_pool = ConnectionPool.from_url(
                     self.redis_url,
+                    max_connections=REDIS_MAX_CONNECTIONS,
+                    retry_on_timeout=REDIS_RETRY_ON_TIMEOUT,
                     socket_connect_timeout=5,
                     socket_timeout=5,
-                    socket_keepalive=True,
-                    socket_keepalive_options={},
-                    health_check_interval=30
+                    socket_keepalive=REDIS_SOCKET_KEEPALIVE,
+                    socket_keepalive_options=REDIS_SOCKET_KEEPALIVE_OPTIONS,
+                    health_check_interval=REDIS_HEALTH_CHECK_INTERVAL,
+                    decode_responses=False  # Keep binary mode for image data
                 )
+                
+                # Create Redis client using the connection pool
+                self.redis_client = redis.Redis(
+                    connection_pool=self.connection_pool,
+                    retry_on_timeout=REDIS_RETRY_ON_TIMEOUT
+                )
+                
+                # Test connection
                 self.redis_client.ping()
-                logger.info(f"Successfully connected to Redis at {self.redis_url}")
+                logger.info(
+                    f"Successfully connected to Redis at {self.redis_url} "
+                    f"with connection pool (max_connections={REDIS_MAX_CONNECTIONS})"
+                )
                 return
             except (ConnectionError, RedisError) as e:
                 if attempt < self.max_retries:
@@ -102,6 +129,7 @@ class RedisStore:
                 else:
                     logger.error(f"Could not connect to Redis at {self.redis_url} after {self.max_retries} attempts: {e}")
                     self.redis_client = None
+                    self.connection_pool = None
     
     def _ensure_connection(self) -> None:
         """

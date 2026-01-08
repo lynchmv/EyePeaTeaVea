@@ -153,6 +153,10 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # This ensures API routes are available before frontend routes
 app.include_router(admin_router)
 
+# Include user router for user-scoped endpoints
+from .admin import user_router
+app.include_router(user_router)
+
 # Admin frontend page routes - serve HTML for browser navigation at /dashboard/*
 # API routes remain at /admin/* to avoid conflicts
 @app.get("/dashboard/")
@@ -202,8 +206,30 @@ async def admin_redirect():
     from fastapi.responses import RedirectResponse
     return RedirectResponse(url="/dashboard/", status_code=301)
 
+# User dashboard routes - accessible via secret_str in URL
+@app.get("/user/{secret_str}/dashboard")
+async def user_dashboard(secret_str: str):
+    """Serve user dashboard HTML for a specific user."""
+    # Validate secret_str format
+    try:
+        validate_secret_str(secret_str)
+    except ValueError:
+        # Invalid format - return 404
+        raise HTTPException(status_code=404, detail="Invalid secret_str format")
+    
+    # Verify user exists
+    user_data = redis_store.get_user_data(secret_str)
+    if not user_data:
+        raise HTTPException(status_code=404, detail="User configuration not found")
+    
+    # Serve user dashboard HTML
+    return FileResponse('user_dashboard/index.html')
+
 # Mount admin static assets (JS, CSS, etc.) at /admin-assets to avoid conflicts
 app.mount("/admin-assets", StaticFiles(directory="admin"), name="admin-assets")
+
+# Mount user dashboard static assets
+app.mount("/user-assets", StaticFiles(directory="user_dashboard"), name="user-assets")
 
 # CORS configuration
 # Note: Stremio recommends using "*" for allow_origins because Stremio clients come from

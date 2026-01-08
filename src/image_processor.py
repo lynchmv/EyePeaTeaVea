@@ -6,6 +6,7 @@ This module handles:
 - Image fetching and caching
 - Image resizing and formatting for different use cases (poster, background, logo, icon)
 - Local repository support for tv-logos to avoid rate limiting
+- Async processing with thread pool for CPU-bound operations
 """
 import os
 import httpx
@@ -16,12 +17,147 @@ from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 import logging
 from urllib.parse import urlparse, parse_qs
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from .redis_store import RedisStore
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+# Thread pool executor for CPU-bound image processing operations
+# This prevents blocking the event loop during PIL operations
+_image_processing_executor = ThreadPoolExecutor(
+    max_workers=min(32, (os.cpu_count() or 1) + 4),
+    thread_name_prefix="image_processor"
+)
+
+def _process_image_sync(
+    content: bytes,
+    tvg_id: str,
+    image_url: str,
+    title: str,
+    width: int,
+    height: int,
+    image_type: str,
+    monochrome: bool,
+    bg_color: tuple[int, int, int]
+) -> BytesIO:
+    """
+    Synchronous CPU-bound image processing function.
+    
+    This function runs in a thread pool to avoid blocking the event loop.
+    All PIL operations are CPU-bound and should be executed in a separate thread.
+    
+    Note: SVG conversion should be done before calling this function.
+    This function expects content to already be in a PIL-compatible format (PNG, JPEG, etc.).
+    
+    Args:
+        content: Raw image bytes (should already be converted from SVG if needed)
+        tvg_id: Channel identifier
+        image_url: Image URL (for logging)
+        title: Title for error messages
+        width: Target width
+        height: Target height
+        image_type: Type of image ("poster", "background", "logo", "icon")
+        monochrome: Whether to convert to grayscale
+        bg_color: Background color RGB tuple
+        
+    Returns:
+        BytesIO containing processed image
+    """
+    try:
+        # Suppress PIL warning about palette images with transparency
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', category=UserWarning, module='PIL')
+            original_image = Image.open(BytesIO(content))
+        
+        logger.debug(f"Processing image for {tvg_id}: mode={original_image.mode}, size={original_image.size}")
+        
+        # Handle different image modes and transparency
+        if original_image.mode == 'P':
+            if 'transparency' in original_image.info:
+                logger.debug(f"Converting palette mode image {tvg_id} with transparency to RGBA")
+                original_image = original_image.convert('RGBA')
+            else:
+                original_image = original_image.convert('RGB')
+        
+        has_alpha = original_image.mode in ('RGBA', 'LA') or 'transparency' in original_image.info
+        if has_alpha:
+            logger.debug(f"Image {tvg_id} has transparency/alpha channel")
+        
+        if monochrome:
+            if has_alpha:
+                bg = Image.new('RGB', original_image.size, (255, 255, 255))
+                if original_image.mode == 'RGBA':
+                    bg.paste(original_image, mask=original_image.split()[3])
+                elif original_image.mode == 'LA':
+                    bg.paste(original_image.convert('RGB'), mask=original_image.split()[1])
+                else:
+                    bg.paste(original_image)
+                original_image = bg.convert("L")
+            else:
+                original_image = original_image.convert("L")
+        else:
+            if has_alpha:
+                bg = Image.new('RGB', original_image.size, bg_color)
+                if original_image.mode == 'RGBA':
+                    bg.paste(original_image, mask=original_image.split()[3])
+                elif original_image.mode == 'LA':
+                    bg.paste(original_image.convert('RGB'), mask=original_image.split()[1])
+                else:
+                    bg.paste(original_image)
+                original_image = bg
+            else:
+                original_image = original_image.convert("RGB")
+        
+        original_width, original_height = original_image.size
+        
+        # Calculate resize ratio
+        ratio = min(width / original_width, height / original_height)
+        new_width = int(original_width * ratio)
+        new_height = int(original_height * ratio)
+        
+        # Resize with high-quality resampling
+        resized_image = original_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        logger.debug(f"Resized {tvg_id} from {original_width}x{original_height} to {new_width}x{new_height}, mode={resized_image.mode}")
+        
+        # Create background
+        if monochrome:
+            background = Image.new('L', (width, height), 0)
+        else:
+            background = Image.new('RGB', (width, height), bg_color)
+        
+        # Center the resized image on the background
+        paste_x = (width - new_width) // 2
+        paste_y = (height - new_height) // 2
+        
+        # Paste the resized image onto the background
+        if resized_image.mode in ('RGBA', 'LA'):
+            logger.debug(f"Pasting {tvg_id} image with alpha channel mask at ({paste_x}, {paste_y})")
+            background.paste(resized_image, (paste_x, paste_y), resized_image.split()[3] if resized_image.mode == 'RGBA' else resized_image.split()[1])
+        elif resized_image.mode == 'RGB':
+            logger.debug(f"Pasting {tvg_id} RGB image at ({paste_x}, {paste_y})")
+            background.paste(resized_image, (paste_x, paste_y))
+        else:
+            logger.warning(f"Unexpected image mode {resized_image.mode} for {tvg_id}, converting to RGB")
+            resized_image = resized_image.convert('RGB')
+            background.paste(resized_image, (paste_x, paste_y))
+        
+        logger.debug(f"Pasted {tvg_id} image onto {image_type} background ({width}x{height})")
+        
+        byte_io = BytesIO()
+        format = "PNG"
+        background.save(byte_io, format)
+        byte_io.seek(0)
+        logger.info(f"Successfully processed {image_type} image for {tvg_id}: {len(byte_io.getvalue())} bytes, format={format}")
+        return byte_io
+        
+    except UnidentifiedImageError:
+        raise
+    except Exception as e:
+        logger.error(f"Error processing image for URL: {image_url} - {e}")
+        raise
 
 # Local tv-logos repository path (optional, set via TV_LOGOS_REPO_PATH env var)
 TV_LOGOS_REPO_PATH = os.getenv("TV_LOGOS_REPO_PATH", "").strip()
@@ -881,18 +1017,20 @@ async def process_image(
         redis_store.store_processed_image(placeholder_cache_key, processed_image.getvalue())
         return processed_image
 
-    # Check if content is SVG and convert to PNG
+    # Check if content is actually SVG (check content, not URL, since URLs can be misleading)
+    # Only convert if content is actually SVG to avoid false positives
     is_svg = False
-    if image_url.lower().endswith('.svg') or image_url.lower().endswith('.svgz'):
-        is_svg = True
-    elif content.startswith(b'<?xml') and b'<svg' in content[:1024]:
+    if content.startswith(b'<?xml') and b'<svg' in content[:1024]:
         is_svg = True
     elif content.startswith(b'<svg'):
+        is_svg = True
+    # Also check for SVG magic bytes or common SVG patterns
+    elif b'<svg' in content[:512] and b'xmlns' in content[:1024]:
         is_svg = True
     
     if is_svg:
         try:
-            # Try to import cairosvg for SVG conversion
+            # Convert SVG to PNG - run in thread pool since cairosvg can be CPU-intensive
             try:
                 import cairosvg
             except ImportError:
@@ -900,8 +1038,9 @@ async def process_image(
                 raise UnidentifiedImageError("SVG format not supported without cairosvg")
             
             logger.info(f"Converting SVG to PNG for {tvg_id} ({image_type}, {width}x{height})")
-            # Convert SVG to PNG at the target size
-            png_data = cairosvg.svg2png(
+            # Run SVG conversion in thread pool to avoid blocking
+            png_data = await asyncio.to_thread(
+                cairosvg.svg2png,
                 bytestring=content,
                 output_width=width,
                 output_height=height
@@ -910,149 +1049,62 @@ async def process_image(
             logger.debug(f"Successfully converted SVG to PNG for {tvg_id}: {len(content)} bytes")
         except Exception as e:
             logger.warning(f"Failed to convert SVG to PNG for {tvg_id}: {e}")
-            raise UnidentifiedImageError(f"SVG conversion failed: {e}")
+            # If SVG conversion fails, try to process as regular image instead of raising error
+            # This handles cases where content looks like SVG but isn't valid
+            logger.debug(f"SVG conversion failed, attempting to process as regular image: {e}")
+            # Don't raise - let PIL try to handle it
 
+    # Extract dominant color early (before processing) for background color
+    # Only for non-monochrome images with actual logos (not placeholders)
+    # This is a relatively quick operation, so we keep it async
+    bg_color = (0, 0, 0)  # Default black background
+    if not monochrome and image_url != GENERIC_PLACEHOLDER_URL:
+        try:
+            # Load image temporarily for color extraction (lightweight operation)
+            # Run in thread pool since PIL operations are CPU-bound
+            temp_image = await asyncio.to_thread(
+                Image.open,
+                BytesIO(content)
+            )
+            
+            # Extract color from original image before any processing
+            # These operations are quick, so we can do them in thread pool too
+            def extract_color_sync(img):
+                with warnings.catch_warnings():
+                    warnings.filterwarnings('ignore', category=UserWarning, module='PIL')
+                    temp_image_for_color = img
+                    if temp_image_for_color.mode == 'RGBA':
+                        temp_bg = Image.new('RGB', temp_image_for_color.size, (255, 255, 255))
+                        temp_bg.paste(temp_image_for_color, mask=temp_image_for_color.split()[3])
+                        temp_image_for_color = temp_bg
+                    elif temp_image_for_color.mode not in ('RGB', 'RGBA'):
+                        temp_image_for_color = temp_image_for_color.convert('RGB')
+                    return _extract_dominant_color(temp_image_for_color)
+            
+            dominant_color = await asyncio.to_thread(extract_color_sync, temp_image)
+            # Create a muted version for the background (this is CPU-light, can stay async)
+            bg_color = _mute_color(dominant_color, saturation_factor=0.25, lightness_adjust=0.3)
+            logger.debug(f"Extracted dominant color {dominant_color} for {tvg_id}, using muted background {bg_color}")
+        except Exception as e:
+            logger.debug(f"Could not extract color for {tvg_id}, using black background: {e}")
+            bg_color = (0, 0, 0)
+    
+    # Run CPU-bound PIL operations in thread pool to avoid blocking event loop
     try:
-        # Suppress PIL warning about palette images with transparency - we handle it correctly
-        with warnings.catch_warnings():
-            warnings.filterwarnings('ignore', category=UserWarning, module='PIL')
-            original_image = Image.open(BytesIO(content))
-        
-        logger.debug(f"Processing image for {tvg_id}: mode={original_image.mode}, size={original_image.size}")
-        
-        # Extract dominant color early (before processing) for background color
-        # Only for non-monochrome images with actual logos (not placeholders)
-        bg_color = (0, 0, 0)  # Default black background
-        if not monochrome and image_url != GENERIC_PLACEHOLDER_URL:
-            try:
-                # Extract color from original image before any processing
-                # Create a temporary RGB version for color extraction if needed
-                temp_image = original_image
-                if temp_image.mode == 'RGBA':
-                    # Extract color from non-transparent areas only
-                    # Create a white background temporarily for color extraction
-                    temp_bg = Image.new('RGB', temp_image.size, (255, 255, 255))
-                    temp_bg.paste(temp_image, mask=temp_image.split()[3])
-                    temp_image = temp_bg
-                elif temp_image.mode not in ('RGB', 'RGBA'):
-                    temp_image = temp_image.convert('RGB')
-                
-                dominant_color = _extract_dominant_color(temp_image)
-                # Create a muted version for the background
-                bg_color = _mute_color(dominant_color, saturation_factor=0.25, lightness_adjust=0.3)
-                logger.debug(f"Extracted dominant color {dominant_color} for {tvg_id}, using muted background {bg_color}")
-            except Exception as e:
-                logger.debug(f"Could not extract color for {tvg_id}, using black background: {e}")
-                bg_color = (0, 0, 0)
-        
-        # Handle different image modes and transparency
-        # Convert palette mode images with transparency to RGBA immediately to avoid warnings
-        if original_image.mode == 'P':
-            # Check if palette has transparency
-            if 'transparency' in original_image.info:
-                logger.debug(f"Converting palette mode image {tvg_id} with transparency to RGBA")
-                original_image = original_image.convert('RGBA')
-            else:
-                original_image = original_image.convert('RGB')
-        
-        # Handle transparency - preserve alpha channel if present
-        has_alpha = original_image.mode in ('RGBA', 'LA') or 'transparency' in original_image.info
-        if has_alpha:
-            logger.debug(f"Image {tvg_id} has transparency/alpha channel")
-        
-        if monochrome:
-            # Convert to grayscale, handling transparency
-            if has_alpha:
-                # Create a white background for transparency
-                bg = Image.new('RGB', original_image.size, (255, 255, 255))
-                if original_image.mode == 'RGBA':
-                    bg.paste(original_image, mask=original_image.split()[3])  # Use alpha channel as mask
-                elif original_image.mode == 'LA':
-                    bg.paste(original_image.convert('RGB'), mask=original_image.split()[1])
-                else:
-                    bg.paste(original_image)
-                original_image = bg.convert("L")
-            else:
-                original_image = original_image.convert("L")
-        else:
-            # Convert to RGB, handling transparency
-            if has_alpha:
-                # Use extracted muted color as background (or black if extraction failed)
-                bg = Image.new('RGB', original_image.size, bg_color)
-                if original_image.mode == 'RGBA':
-                    bg.paste(original_image, mask=original_image.split()[3])  # Use alpha channel as mask
-                elif original_image.mode == 'LA':
-                    # LA mode: L (luminance) + A (alpha)
-                    bg.paste(original_image.convert('RGB'), mask=original_image.split()[1])
-                else:
-                    bg.paste(original_image)
-                original_image = bg
-            else:
-                original_image = original_image.convert("RGB")
-
-        original_width, original_height = original_image.size
-
-        # Calculate resize ratio to fit within target dimensions while maintaining aspect ratio
-        ratio = min(width / original_width, height / original_height)
-        new_width = int(original_width * ratio)
-        new_height = int(original_height * ratio)
-
-        # Extract dominant color from original image for background (before resizing for performance)
-        # Only extract color for non-monochrome images and when we have an actual logo (not placeholder)
-        bg_color = (0, 0, 0)  # Default black background
-        if not monochrome and image_url != GENERIC_PLACEHOLDER_URL:
-            try:
-                # Extract dominant color from the original image
-                dominant_color = _extract_dominant_color(original_image)
-                # Create a muted version for the background
-                bg_color = _mute_color(dominant_color, saturation_factor=0.25, lightness_adjust=0.3)
-                logger.debug(f"Extracted dominant color {dominant_color} for {tvg_id}, using muted background {bg_color}")
-            except Exception as e:
-                logger.debug(f"Could not extract color for {tvg_id}, using black background: {e}")
-                bg_color = (0, 0, 0)
-
-        # Resize with high-quality resampling
-        resized_image = original_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-        logger.debug(f"Resized {tvg_id} from {original_width}x{original_height} to {new_width}x{new_height}, mode={resized_image.mode}")
-
-        # Create background with extracted/muted color
-        if monochrome:
-            background = Image.new('L', (width, height), 0)  # Black for monochrome
-        else:
-            background = Image.new('RGB', (width, height), bg_color)
-
-        # Center the resized image on the background
-        paste_x = (width - new_width) // 2
-        paste_y = (height - new_height) // 2
-
-        # Paste the resized image onto the background
-        # Ensure we're pasting the actual image content, not just a color
-        # Note: resized_image should be RGB at this point (we converted earlier), but check anyway
-        if resized_image.mode in ('RGBA', 'LA'):
-            logger.debug(f"Pasting {tvg_id} image with alpha channel mask at ({paste_x}, {paste_y})")
-            # Use the alpha channel as mask for proper transparency handling
-            background.paste(resized_image, (paste_x, paste_y), resized_image.split()[3] if resized_image.mode == 'RGBA' else resized_image.split()[1])
-        elif resized_image.mode == 'RGB':
-            logger.debug(f"Pasting {tvg_id} RGB image at ({paste_x}, {paste_y})")
-            # Direct paste for RGB images - this preserves all colors including white
-            background.paste(resized_image, (paste_x, paste_y))
-        else:
-            # Convert to RGB if it's in an unexpected mode
-            logger.warning(f"Unexpected image mode {resized_image.mode} for {tvg_id}, converting to RGB")
-            resized_image = resized_image.convert('RGB')
-            background.paste(resized_image, (paste_x, paste_y))
-        
-        logger.debug(f"Pasted {tvg_id} image onto {image_type} background ({width}x{height})")
-
-        byte_io = BytesIO()
-        # Use PNG for all images to preserve quality and avoid JPEG compression artifacts
-        # PNG ensures perfect color preservation including white pixels
-        format = "PNG"
-        background.save(byte_io, format)
-        byte_io.seek(0)
-        logger.info(f"Successfully processed {image_type} image for {tvg_id}: {len(byte_io.getvalue())} bytes, format={format}")
-        redis_store.store_processed_image(cache_key, byte_io.getvalue())
-        return byte_io
+        processed_image = await asyncio.to_thread(
+            _process_image_sync,
+            content,
+            tvg_id,
+            image_url,
+            title,
+            width,
+            height,
+            image_type,
+            monochrome,
+            bg_color
+        )
+        redis_store.store_processed_image(cache_key, processed_image.getvalue())
+        return processed_image
     except UnidentifiedImageError:
         # Generate placeholder when image can't be identified - use versioned cache key
         logger.info(f"Unidentified image format for {tvg_id}, generating {image_type} placeholder")

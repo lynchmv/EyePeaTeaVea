@@ -295,6 +295,9 @@ async function getManifestUrl(isRedirect = false) {
         resultDiv.style.display = 'block';
 
         generateQRCode(manifestUrl);
+        
+        // Generate and display dashboard QR code and link
+        displayDashboardInfo(secret_str, hostUrl);
 
         return manifestUrl;
 
@@ -319,6 +322,53 @@ function generateQRCode(url) {
     qr.addData(url);
     qr.make();
     document.getElementById('qrcode').innerHTML = qr.createImgTag(4);
+}
+
+function displayDashboardInfo(secretStr, hostUrl) {
+    // Normalize hostUrl: remove protocol and trailing slashes
+    const normalizedHost = hostUrl.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    // Use the same protocol as the current page
+    const protocol = window.location.protocol;
+    const dashboardUrl = `${protocol}//${normalizedHost}/user/${secretStr}/dashboard`;
+    
+    // Check if dashboard section already exists
+    let dashboardSection = document.getElementById('dashboard-section');
+    if (!dashboardSection) {
+        // Create dashboard section after the manifest URL section
+        const resultDiv = document.getElementById('result');
+        dashboardSection = document.createElement('div');
+        dashboardSection.id = 'dashboard-section';
+        dashboardSection.className = 'mt-4';
+        resultDiv.appendChild(dashboardSection);
+    }
+    
+    dashboardSection.innerHTML = `
+        <h2>Your Personal Dashboard:</h2>
+        <p class="text-muted">Access your personal dashboard to view channels, manage logo overrides, and monitor your configuration.</p>
+        <div class="input-group mb-3">
+            <input type="text" class="form-control" id="dashboard_url" value="${dashboardUrl}" readonly>
+            <button class="btn btn-outline-secondary" type="button" id="copyDashboardBtn">Copy</button>
+        </div>
+        <div id="dashboard-qrcode" class="text-center mb-3"></div>
+        <p class="text-muted small">
+            <i class="bi bi-info-circle"></i> 
+            Bookmark this dashboard URL or scan the QR code to easily access your configuration dashboard anytime.
+        </p>
+    `;
+    
+    // Generate QR code for dashboard
+    const dashboardQr = qrcode(0, 'L');
+    dashboardQr.addData(dashboardUrl);
+    dashboardQr.make();
+    document.getElementById('dashboard-qrcode').innerHTML = dashboardQr.createImgTag(4);
+    
+    // Add copy button handler
+    document.getElementById('copyDashboardBtn').addEventListener('click', () => {
+        const dashboardUrlInput = document.getElementById('dashboard_url');
+        dashboardUrlInput.focus();
+        dashboardUrlInput.select();
+        copyToClipboard(dashboardUrl, 'Dashboard URL copied to clipboard!');
+    });
 }
 
 async function updateConfiguration() {
@@ -388,10 +438,10 @@ function clearForm() {
     }
 }
 
-function copyToClipboard(text) {
+function copyToClipboard(text, successMessage = 'Manifest URL copied to clipboard!') {
     try {
         navigator.clipboard.writeText(text);
-        showToast('Manifest URL copied to clipboard!', 'success');
+        showToast(successMessage, 'success');
     } catch (error) {
         showToast('Unable to access clipboard. URL is ready to be copied manually.', 'warning');
     }

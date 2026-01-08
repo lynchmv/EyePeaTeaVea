@@ -33,6 +33,9 @@ logger = logging.getLogger(__name__)
 # Initialize admin router
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
 
+# Initialize user router for user-scoped endpoints (no admin auth required)
+user_router = APIRouter(prefix="/user", tags=["user"])
+
 # Initialize dependencies
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 redis_store = RedisStore(REDIS_URL)
@@ -1255,3 +1258,114 @@ async def import_logo_overrides(
     )
     
     return {"message": "Logo override deleted successfully"}
+
+# User-scoped endpoints (no admin auth required - secret_str in URL acts as auth)
+def verify_user_secret_str(secret_str: str) -> UserData:
+    """
+    Verify that a secret_str exists and return user data.
+    Used for user-scoped endpoints where secret_str in URL acts as authentication.
+    """
+    from .utils import validate_secret_str
+    try:
+        validate_secret_str(secret_str)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid secret_str: {e}")
+    
+    user_data = redis_store.get_user_data(secret_str)
+    if not user_data:
+        raise HTTPException(status_code=404, detail="User configuration not found")
+    
+    return user_data
+
+@user_router.get("/{secret_str}/api/info")
+async def get_user_info(secret_str: str):
+    """Get user information (channels, events, configuration summary)."""
+    user_data = verify_user_secret_str(secret_str)
+    
+    channels = redis_store.get_all_channels(secret_str)
+    channel_count = len(channels)
+    event_count = sum(1 for c in channels.values() if json.loads(c).get("is_event", False))
+    
+    return {
+        "secret_str": secret_str,
+        "channel_count": channel_count,
+        "event_count": event_count,
+        "m3u_source_count": len(user_data.m3u_sources),
+        "host_url": str(user_data.host_url),
+        "has_password": user_data.addon_password is not None,
+        "timezone": user_data.timezone
+    }
+
+@user_router.get("/{secret_str}/api/channels")
+async def get_user_channels(
+    secret_str: str,
+    page: int = 1,
+    per_page: int = 50,
+    search: Optional[str] = None
+):
+    """Get user's channels with pagination."""
+    verify_user_secret_str(secret_str)
+    
+    channels = redis_store.get_all_channels(secret_str)
+    
+    # Filter out events, only return regular channels
+    regular_channels = []
+    for channel_json in channels.values():
+        try:
+            channel = json.loads(channel_json)
+            if not channel.get("is_event", False):
+                regular_channels.append(channel)
+        except json.JSONDecodeError:
+            continue
+    
+    # Apply search filter
+    if search:
+        search_lower = search.lower()
+        regular_channels = [
+            c for c in regular_channels
+            if search_lower in c.get("tvg_name", "").lower() or search_lower in c.get("tvg_id", "").lower()
+        ]
+    
+    # Sort by name
+    regular_channels.sort(key=lambda x: x.get("tvg_name", "").lower())
+    
+    # Paginate
+    total = len(regular_channels)
+    start = (page - 1) * per_page
+    end = start + per_page
+    paginated_channels = regular_channels[start:end]
+    
+    return {
+        "channels": paginated_channels,
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "pages": (total + per_page - 1) // per_page
+        }
+    }
+
+@user_router.get("/{secret_str}/api/logo-overrides")
+async def get_user_logo_overrides(secret_str: str):
+    """Get user's logo overrides."""
+    verify_user_secret_str(secret_str)
+    
+    overrides = redis_store.get_all_logo_overrides(secret_str)
+    channels = redis_store.get_all_channels(secret_str)
+    
+    # Get list of available channel tvg_ids
+    available_channels = []
+    for channel_json in channels.values():
+        try:
+            channel = json.loads(channel_json)
+            available_channels.append({
+                "tvg_id": channel.get("tvg_id", ""),
+                "tvg_name": channel.get("tvg_name", "")
+            })
+        except json.JSONDecodeError:
+            continue
+    
+    return {
+        "overrides": [{"tvg_id": k, **v} for k, v in overrides.items()],
+        "available_channels": available_channels
+    }
