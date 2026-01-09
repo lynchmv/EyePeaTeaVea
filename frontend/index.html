@@ -94,6 +94,47 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Dashboard Info Modal -->
+                <div class="modal fade" id="dashboardModal" tabindex="-1" aria-labelledby="dashboardModalLabel" aria-hidden="true">
+                    <div class="modal-dialog modal-lg modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="dashboardModalLabel">
+                                    <i class="bi bi-speedometer2"></i> Your Personal Dashboard
+                                </h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body">
+                                <div class="alert alert-info">
+                                    <i class="bi bi-info-circle"></i>
+                                    <strong>Bookmark this dashboard!</strong> Access your personal dashboard anytime to view channels, manage logo overrides, and monitor your configuration.
+                                </div>
+                                <div class="mb-3">
+                                    <label for="dashboard-url-modal" class="form-label">Dashboard URL:</label>
+                                    <div class="input-group">
+                                        <input type="text" class="form-control" id="dashboard-url-modal" readonly>
+                                        <button class="btn btn-outline-secondary" type="button" id="copyDashboardModalBtn">
+                                            <i class="bi bi-clipboard"></i> Copy
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="text-center mb-3">
+                                    <div id="dashboard-qrcode-modal"></div>
+                                    <p class="text-muted small mt-2">Scan this QR code to access your dashboard</p>
+                                </div>
+                                <div class="d-grid gap-2">
+                                    <a href="#" id="open-dashboard-link" class="btn btn-primary" target="_blank">
+                                        <i class="bi bi-box-arrow-up-right"></i> Open Dashboard
+                                    </a>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

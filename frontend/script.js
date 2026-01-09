@@ -202,15 +202,25 @@ document.addEventListener('DOMContentLoaded', () => {
             spinner.style.display = 'inline-block';
             
             const isUpdateMode = modeUpdate.checked;
-            const manifestUrl = isUpdateMode 
+            const result = isUpdateMode 
                 ? await updateConfiguration() 
                 : await getManifestUrl(true);
             
-            if (manifestUrl) {
+            if (result) {
                 if (!isUpdateMode) {
-                    window.location.href = manifestUrl;
+                    // Show dashboard modal before redirecting
+                    const { manifestUrl, secret_str } = result;
+                    const hostUrl = document.getElementById('host_url').value;
+                    showDashboardModal(secret_str, hostUrl, manifestUrl);
+                    // Small delay to let user see the modal, then redirect
+                    setTimeout(() => {
+                        window.location.href = manifestUrl;
+                    }, 3000);
                 } else {
-                    displayFallbackUrl(manifestUrl);
+                    // Update mode - show dashboard info in result section
+                    displayFallbackUrl(result.manifestUrl);
+                    const hostUrl = document.getElementById('host_url').value;
+                    displayDashboardInfo(result.secret_str, hostUrl);
                     showToast('Configuration updated successfully!', 'success');
                 }
             }
@@ -220,8 +230,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('shareBtn').addEventListener('click', async (event) => {
         event.preventDefault();
-        const manifestUrl = await getManifestUrl();
-        if (manifestUrl) {
+        const result = await getManifestUrl();
+        if (result) {
+            const manifestUrl = typeof result === 'string' ? result : result.manifestUrl;
             try {
                 await navigator.share({
                     title: 'EyePeaTeaVea Addon Manifest',
@@ -236,8 +247,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('copyBtn').addEventListener('click', async (event) => {
         event.preventDefault();
-        const manifestUrl = await getManifestUrl();
-        if (manifestUrl) {
+        const result = await getManifestUrl();
+        if (result) {
+            const manifestUrl = typeof result === 'string' ? result : result.manifestUrl;
             copyToClipboard(manifestUrl);
         }
     });
@@ -296,10 +308,10 @@ async function getManifestUrl(isRedirect = false) {
 
         generateQRCode(manifestUrl);
         
-        // Generate and display dashboard QR code and link
-        displayDashboardInfo(secret_str, hostUrl);
+        // Generate and display dashboard QR code and link (but don't show in result div)
+        // It will be shown in modal instead
 
-        return manifestUrl;
+        return { manifestUrl, secret_str };
 
     } catch (error) {
         showToast('Error: ' + error.message, 'error');
@@ -315,6 +327,14 @@ function displayFallbackUrl(url) {
     manifestUrlInput.focus();
     manifestUrlInput.select();
     generateQRCode(url);
+    
+    // Also show dashboard info for update mode
+    const pathMatch = window.location.pathname.match(/^\/([^\/]+)\/configure$/);
+    if (pathMatch) {
+        const secretStr = pathMatch[1];
+        const hostUrl = document.getElementById('host_url').value;
+        displayDashboardInfo(secretStr, hostUrl);
+    }
 }
 
 function generateQRCode(url) {
@@ -322,6 +342,37 @@ function generateQRCode(url) {
     qr.addData(url);
     qr.make();
     document.getElementById('qrcode').innerHTML = qr.createImgTag(4);
+}
+
+function showDashboardModal(secretStr, hostUrl, manifestUrl) {
+    // Normalize hostUrl: remove protocol and trailing slashes
+    const normalizedHost = hostUrl.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    // Use the same protocol as the current page
+    const protocol = window.location.protocol;
+    const dashboardUrl = `${protocol}//${normalizedHost}/user/${secretStr}/dashboard`;
+    
+    // Set dashboard URL in modal
+    document.getElementById('dashboard-url-modal').value = dashboardUrl;
+    document.getElementById('open-dashboard-link').href = dashboardUrl;
+    
+    // Generate QR code for dashboard
+    const dashboardQr = qrcode(0, 'L');
+    dashboardQr.addData(dashboardUrl);
+    dashboardQr.make();
+    document.getElementById('dashboard-qrcode-modal').innerHTML = dashboardQr.createImgTag(4);
+    
+    // Add copy button handler
+    const copyBtn = document.getElementById('copyDashboardModalBtn');
+    copyBtn.onclick = () => {
+        const dashboardUrlInput = document.getElementById('dashboard-url-modal');
+        dashboardUrlInput.focus();
+        dashboardUrlInput.select();
+        copyToClipboard(dashboardUrl, 'Dashboard URL copied to clipboard!');
+    };
+    
+    // Show the modal
+    const modal = new bootstrap.Modal(document.getElementById('dashboardModal'));
+    modal.show();
 }
 
 function displayDashboardInfo(secretStr, hostUrl) {
@@ -413,9 +464,10 @@ async function updateConfiguration() {
         const result = await response.json();
         // Normalize hostUrl: remove protocol and trailing slashes
         const normalizedHost = hostUrl.replace(/^https?:\/\//, '').replace(/\/+$/, '');
-        const manifestUrl = `${normalizedHost}/${secretStr}/manifest.json`;
+        const protocol = window.location.protocol;
+        const manifestUrl = `${protocol}//${normalizedHost}/${secretStr}/manifest.json`;
         
-        return manifestUrl;
+        return { manifestUrl, secret_str: secretStr };
 
     } catch (error) {
         showToast('Error: ' + error.message, 'error');

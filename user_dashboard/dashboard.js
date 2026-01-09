@@ -39,6 +39,7 @@ async function loadDashboard() {
         // Update links
         const manifestUrl = `${info.host_url}/${secretStr}/manifest.json`;
         document.getElementById('manifest-link').href = manifestUrl;
+        document.getElementById('update-config-link').href = `/${secretStr}/configure`;
         document.getElementById('configure-link').href = `/${secretStr}/configure`;
         document.getElementById('configure-link-2').href = `/${secretStr}/configure`;
 
