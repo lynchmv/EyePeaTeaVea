@@ -308,24 +308,30 @@ function displayChannels(channels, pagination) {
         return;
     }
     
-    let html = '<div class="table-responsive"><table class="table table-sm table-hover">';
-    html += '<thead><tr><th>Channel Name</th><th>Group</th><th>Channel ID</th><th>Logo</th></tr></thead><tbody>';
+    let html = '<div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4">';
     
-    channels.forEach(channel => {
+    channels.forEach((channel, index) => {
         const tvgName = escapeHtml(channel.tvg_name || channel.tvg_id || 'N/A');
         const groupTitle = escapeHtml(channel.group_title || 'N/A');
         const tvgId = escapeHtml(channel.tvg_id || '');
         const logoUrl = channel.tvg_logo || '';
+        const delay = (index % 15) * 0.05;
         
-        html += `<tr>
-            <td><strong>${tvgName}</strong></td>
-            <td><span class="badge bg-secondary">${groupTitle}</span></td>
-            <td><code>${tvgId}</code></td>
-            <td>${logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="Logo" style="max-height: 30px;" onerror="this.style.display='none'">` : 'N/A'}</td>
-        </tr>`;
+        html += `<div class="col">
+            <div class="card h-100 channel-card" style="animation: fadeInUp 0.5s ease-out forwards; opacity: 0; animation-delay: ${delay}s">
+                <div class="card-body d-flex align-items-center">
+                    ${logoUrl ? `<img src="${escapeHtml(logoUrl)}" class="me-3" alt="Logo" style="width: 50px; height: 50px; object-fit: contain; background: rgba(0,0,0,0.2); border-radius: 8px; padding: 5px;" onerror="this.style.display='none'">` : '<div class="me-3" style="width: 50px; height: 50px; background: rgba(0,0,0,0.2); border-radius: 8px; display: flex; align-items: center; justify-content: center;"><i class="bi bi-tv text-muted"></i></div>'}
+                    <div style="min-width: 0;">
+                        <h6 class="mb-1 text-truncate" title="${tvgName}"><strong>${tvgName}</strong></h6>
+                        <span class="badge bg-secondary mb-1">${groupTitle}</span>
+                        <div class="small text-muted text-truncate" title="${tvgId}"><code>${tvgId}</code></div>
+                    </div>
+                </div>
+            </div>
+        </div>`;
     });
     
-    html += '</tbody></table></div>';
+    html += '</div>';
     
     // Add pagination
     if (pagination.pages > 1) {
@@ -385,24 +391,30 @@ function displayEvents(events, pagination) {
         return;
     }
     
-    let html = '<div class="table-responsive"><table class="table table-sm table-hover">';
-    html += '<thead><tr><th>Event Title</th><th>Sport</th><th>Date/Time</th><th>Channel ID</th></tr></thead><tbody>';
+    let html = '<div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4">';
     
-    events.forEach(event => {
+    events.forEach((event, index) => {
         const eventTitle = escapeHtml(event.event_title || 'N/A');
         const eventSport = escapeHtml(event.event_sport || 'N/A');
         const eventDateTime = escapeHtml(event.event_datetime_full || 'N/A');
         const tvgId = escapeHtml(event.tvg_id || '');
+        const delay = (index % 15) * 0.05;
         
-        html += `<tr>
-            <td><strong>${eventTitle}</strong></td>
-            <td><span class="badge bg-info">${eventSport}</span></td>
-            <td>${eventDateTime}</td>
-            <td><code>${tvgId}</code></td>
-        </tr>`;
+        html += `<div class="col">
+            <div class="card h-100 channel-card pt-3" style="animation: fadeInUp 0.5s ease-out forwards; opacity: 0; animation-delay: ${delay}s">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <h6 class="mb-0 text-truncate" title="${eventTitle}" style="max-width: 70%"><strong>${eventTitle}</strong></h6>
+                        <span class="badge" style="background: var(--primary-gradient)">${eventSport}</span>
+                    </div>
+                    <div class="text-muted small mb-2"><i class="bi bi-clock me-1"></i>${eventDateTime}</div>
+                    <div class="small text-truncate" title="${tvgId}"><code>${tvgId}</code></div>
+                </div>
+            </div>
+        </div>`;
     });
     
-    html += '</tbody></table></div>';
+    html += '</div>';
     
     // Add pagination
     if (pagination.pages > 1) {
