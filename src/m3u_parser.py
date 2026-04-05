@@ -36,8 +36,9 @@ class M3UParser:
     Attributes:
         m3u_source: URL or file path to the M3U playlist
     """
-    def __init__(self, m3u_source: str):
+    def __init__(self, m3u_source: str, timezone: str = "US/Eastern"):
         self.m3u_source = m3u_source
+        self.timezone = timezone
 
     def extract_event_datetime(self, tvg_name: str) -> datetime | None:
         """
@@ -303,13 +304,18 @@ class M3UParser:
                         continue # Skip to the next channel if the event is in the past
                     event_datetime_full = event_datetime.strftime("%Y-%m-%d %H:%M:%S")
                     
-                    # Convert to EST for display
-                    est_tz = pytz.timezone("US/Eastern")
-                    est_dt = event_datetime.astimezone(est_tz)
+                    # Convert to user timezone for display
+                    try:
+                        target_tz = pytz.timezone(self.timezone)
+                    except pytz.UnknownTimeZoneError:
+                        logger.warning(f"Unknown timezone '{self.timezone}', falling back to UTC")
+                        target_tz = pytz.UTC
+                        
+                    target_dt = event_datetime.astimezone(target_tz)
                     
                     # Format for display
                     # Converts 'Nov 08 2025 12:00 PM' to 'Nov 08 12:00PM'
-                    formatted_dt = est_dt.strftime("%b %d %I:%M%p").replace(" 0", " ").replace(":00", "")
+                    formatted_dt = target_dt.strftime("%b %d %I:%M%p").replace(" 0", " ").replace(":00", "")
                     
                     # Further clean the event name
                     cleaned_name = re.sub(date_pattern, '', tvg_name).strip()

@@ -69,7 +69,8 @@ class Scheduler:
         
         for source in user_data.m3u_sources:
             try:
-                m3u_parser = M3UParser(source)
+                user_tz = user_data.timezone if hasattr(user_data, 'timezone') and user_data.timezone else "US/Eastern"
+                m3u_parser = M3UParser(source, user_tz)
                 channels_list = m3u_parser.parse()
                 all_channels_list.extend(channels_list)
                 logger.info(f"Successfully parsed {len(channels_list)} channels from {source}")
@@ -157,7 +158,8 @@ class Scheduler:
         # Collect EPG URLs from all M3U sources
         for source in user_data.m3u_sources:
             try:
-                m3u_parser = M3UParser(source)
+                user_tz = user_data.timezone if hasattr(user_data, 'timezone') and user_data.timezone else "US/Eastern"
+                m3u_parser = M3UParser(source, user_tz)
                 # Extract EPG URLs from M3U header
                 header_epg_urls = m3u_parser.extract_epg_urls()
                 epg_urls.update(header_epg_urls)

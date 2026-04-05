@@ -33,7 +33,8 @@ async function loadDashboard() {
         document.getElementById('event-count').textContent = info.event_count || 0;
         document.getElementById('m3u-count').textContent = info.m3u_source_count || 0;
         document.getElementById('host-url').textContent = info.host_url || '-';
-        document.getElementById('timezone').textContent = info.timezone || 'Auto-detect';
+        window.userTimezone = info.timezone || 'Auto-detect';
+        document.getElementById('timezone').textContent = window.userTimezone;
         document.getElementById('has-password').textContent = info.has_password ? 'Yes' : 'No';
         
         // Update links (with null checks)
@@ -396,7 +397,25 @@ function displayEvents(events, pagination) {
     events.forEach((event, index) => {
         const eventTitle = escapeHtml(event.event_title || 'N/A');
         const eventSport = escapeHtml(event.event_sport || 'N/A');
-        const eventDateTime = escapeHtml(event.event_datetime_full || 'N/A');
+        
+        let displayDatetime = escapeHtml(event.event_datetime_full || 'N/A');
+        if (event.event_datetime_full) {
+            try {
+                // Parse UTC string by appending 'Z'
+                const dt = new Date(event.event_datetime_full + "Z");
+                const formatOptions = {
+                    year: 'numeric', month: 'short', day: 'numeric',
+                    hour: 'numeric', minute: '2-digit', timeZoneName: 'short'
+                };
+                if (window.userTimezone && window.userTimezone !== 'Auto-detect') {
+                    formatOptions.timeZone = window.userTimezone;
+                }
+                displayDatetime = dt.toLocaleString(undefined, formatOptions);
+            } catch (e) {
+                console.error("Error formatting datetime", e);
+            }
+        }
+
         const tvgId = escapeHtml(event.tvg_id || '');
         const delay = (index % 15) * 0.05;
         
@@ -407,7 +426,7 @@ function displayEvents(events, pagination) {
                         <h6 class="mb-0 text-truncate" title="${eventTitle}" style="max-width: 70%"><strong>${eventTitle}</strong></h6>
                         <span class="badge" style="background: var(--primary-gradient)">${eventSport}</span>
                     </div>
-                    <div class="text-muted small mb-2"><i class="bi bi-clock me-1"></i>${eventDateTime}</div>
+                    <div class="text-muted small mb-2"><i class="bi bi-clock me-1"></i>${displayDatetime}</div>
                     <div class="small text-truncate" title="${tvgId}"><code>${tvgId}</code></div>
                 </div>
             </div>
