@@ -8,6 +8,7 @@ in Redis. Each user can have their own cron schedule for updates.
 import os
 import redis
 import logging
+import time
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -18,10 +19,15 @@ from .epg_parser import EPGParser
 from .redis_store import RedisStore, RedisConnectionError
 from .models import UserData
 from .utils import validate_cron_expression
+from .observability import (
+    record_m3u_parse,
+    record_epg_parse,
+    record_scheduler_job,
+    update_gauge_metrics
+)
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -50,11 +56,13 @@ class Scheduler:
         
         Processes all M3U sources for a user, parses channels, and stores them.
         Continues processing other sources even if one fails.
+        Records metrics for observability.
         
         Args:
             secret_str: User's unique secret string
             user_data: UserData containing M3U sources and configuration
         """
+        start_time = time.time()
         logger.info(f"Starting scheduled M3U fetch for secret_str: {secret_str[:8]}...")
         all_channels_list = []
         errors = []
@@ -93,18 +101,29 @@ class Scheduler:
         else:
             logger.warning(f"No channels were parsed for secret_str: {secret_str[:8]}...")
         
+        # Calculate duration and record metrics
+        duration = time.time() - start_time
+        success = len(errors) == 0
+        record_m3u_parse(
+            secret_str=secret_str,
+            success=success,
+            duration_seconds=duration,
+            channel_count=len(all_channels_list)
+        )
+        
         # Fetch and store EPG data if available
         self._fetch_and_store_epg(secret_str, user_data, all_channels_list)
         
         # Store parse history
         parse_result = {
             "timestamp": datetime.now().isoformat(),
-            "success": len(errors) == 0,
+            "success": success,
             "channel_count": len(all_channels_list),
             "error_count": len(errors),
             "errors": errors,
             "sources_processed": len(user_data.m3u_sources),
-            "sources_failed": len([e for e in errors if "Error parsing M3U source" in e])
+            "sources_failed": len([e for e in errors if "Error parsing M3U source" in e]),
+            "duration_seconds": round(duration, 2)
         }
         self.redis_store.store_parse_history(secret_str, parse_result)
         
@@ -221,9 +240,18 @@ class Scheduler:
         if all_epg_data:
             try:
                 self.redis_store.store_epg_data(secret_str, all_epg_data)
+                total_programs = sum(len(progs) for progs in all_epg_data.values())
                 logger.info(f"Stored EPG data for {len(all_epg_data)} channels for secret_str: {secret_str[:8]}...")
+                
+                # Record EPG metrics
+                record_epg_parse(
+                    secret_str=secret_str,
+                    success=True,
+                    program_count=total_programs
+                )
             except RedisConnectionError as e:
                 logger.error(f"Failed to store EPG data for {secret_str[:8]}...: {e}")
+                record_epg_parse(secret_str=secret_str, success=False)
 
     def _scheduled_fetch_wrapper(self, secret_str: str) -> None:
         """
@@ -232,15 +260,31 @@ class Scheduler:
         This is called by APScheduler. It fetches the current user_data from Redis
         and then triggers the M3U fetch. This ensures we always use the latest
         configuration even if it was updated after scheduling.
+        Records job execution metrics for observability.
         
         Args:
             secret_str: User's unique secret string
         """
-        user_data = self.redis_store.get_user_data(secret_str)
-        if not user_data:
-            logger.error(f"User data not found for secret_str: {secret_str[:8]}.... Skipping scheduled fetch.")
-            return
-        self._fetch_and_store_m3u(secret_str, user_data)
+        start_time = time.time()
+        success = False
+        
+        try:
+            user_data = self.redis_store.get_user_data(secret_str)
+            if not user_data:
+                logger.error(f"User data not found for secret_str: {secret_str[:8]}.... Skipping scheduled fetch.")
+                return
+            self._fetch_and_store_m3u(secret_str, user_data)
+            success = True
+        except Exception as e:
+            logger.error(f"Scheduled job failed for secret_str: {secret_str[:8]}...: {e}", exc_info=True)
+        finally:
+            # Record scheduler job metrics
+            duration = time.time() - start_time
+            record_scheduler_job(
+                job_type="m3u_fetch",
+                success=success,
+                duration_seconds=duration
+            )
 
     def trigger_m3u_fetch_for_user(self, secret_str: str, user_data: UserData) -> None:
         """
@@ -347,6 +391,9 @@ class Scheduler:
                 jobs_failed += 1
         
         logger.info(f"Scheduler initialization complete. Added {jobs_added} jobs, {jobs_failed} failed.")
+        
+        # Update gauge metrics
+        update_gauge_metrics(active_jobs=jobs_added)
 
     def stop_scheduler(self) -> None:
         """

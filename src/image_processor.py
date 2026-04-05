@@ -13,6 +13,8 @@ import httpx
 import asyncio
 import colorsys
 import warnings
+import hashlib
+import re
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 import logging
@@ -24,6 +26,13 @@ from .redis_store import RedisStore
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+# Maximum number of fallback URLs to try before giving up
+MAX_FALLBACK_URLS = 20  # Limit to prevent excessive requests
+
+# Cache negative results (404s) to avoid retrying failed URLs
+# Cache for 24 hours (86400 seconds)
+NEGATIVE_CACHE_EXPIRATION = 86400
 
 # Thread pool executor for CPU-bound image processing operations
 # This prevents blocking the event loop during PIL operations
@@ -253,6 +262,48 @@ async def close_http_client() -> None:
 
 # GitHub tv-logos repository URL pattern
 GITHUB_TV_LOGOS_BASE = "https://github.com/tv-logo/tv-logos/blob/main/"
+GITHUB_TV_LOGOS_RAW_BASE = "https://raw.githubusercontent.com/tv-logo/tv-logos/main/"
+
+def github_raw_url_to_local_path(url: str) -> str | None:
+    """
+    Convert a GitHub tv-logos raw URL to a local file path.
+    
+    Converts URLs like:
+    https://raw.githubusercontent.com/tv-logo/tv-logos/main/countries/united-states/c-span-1-us.png
+    To local paths like:
+    {TV_LOGOS_REPO_PATH}/countries/united-states/c-span-1-us.png
+    
+    Args:
+        url: GitHub raw URL to convert
+        
+    Returns:
+        Local file path if URL matches GitHub tv-logos pattern and repo is configured, None otherwise
+    """
+    if not TV_LOGOS_REPO_PATH:
+        return None
+    
+    if not url.startswith(GITHUB_TV_LOGOS_RAW_BASE):
+        return None
+    
+    try:
+        # Extract path after base URL
+        file_path = url.replace(GITHUB_TV_LOGOS_RAW_BASE, "")
+        local_path = os.path.join(TV_LOGOS_REPO_PATH, file_path)
+        
+        # Normalize path to prevent directory traversal
+        local_path = os.path.normpath(local_path)
+        
+        # Ensure the path is within the repo directory (security check)
+        repo_path_norm = os.path.normpath(TV_LOGOS_REPO_PATH)
+        local_path_norm = os.path.normpath(local_path)
+        if not local_path_norm.startswith(repo_path_norm + os.sep) and local_path_norm != repo_path_norm:
+            logger.warning(f"Invalid path detected (directory traversal attempt): {url} -> {local_path_norm}")
+            return None
+        
+        return local_path
+    except Exception as e:
+        logger.warning(f"Error converting GitHub raw URL to local path: {url} - {e}")
+        return None
 
 def github_url_to_local_path(url: str) -> str | None:
     """
@@ -808,21 +859,328 @@ def generate_placeholder_image(
     
     return result
 
-async def fetch_image_content(redis_store: RedisStore, url: str) -> bytes:
+def normalize_channel_name_for_logo(name: str) -> str:
+    """
+    Normalize channel name/ID for tv-logos repository lookup.
+    
+    Converts channel names to match tv-logos naming conventions:
+    - Lowercase
+    - Replace spaces, dots, underscores with hyphens
+    - Remove special characters
+    - Handle common patterns (e.g., "CNN" -> "cnn", "ESPN HD" -> "espn-hd")
+    
+    Args:
+        name: Channel name or tvg_id
+        
+    Returns:
+        Normalized string suitable for tv-logos lookup
+    """
+    if not name:
+        return ""
+    
+    # Convert to lowercase
+    normalized = name.lower()
+    
+    # Replace common separators with hyphens
+    normalized = normalized.replace('.', '-')
+    normalized = normalized.replace('_', '-')
+    normalized = normalized.replace(' ', '-')
+    
+    # Remove multiple consecutive hyphens
+    while '--' in normalized:
+        normalized = normalized.replace('--', '-')
+    
+    # Remove leading/trailing hyphens
+    normalized = normalized.strip('-')
+    
+    return normalized
+
+def generate_name_variations(normalized_name: str) -> list[str]:
+    """
+    Generate variations of a normalized channel name for fuzzy matching.
+    
+    Creates variations by:
+    - Trying the name as-is
+    - Removing quality suffixes (-hd, -sd, -4k, -uhd) before country matching
+    - Handling country code variations (pl/pt, etc.)
+    - Adding/removing common suffixes (-us, -ca, -uk, -au, -pt, -pl, etc.)
+    - Trying without extracted country codes
+    
+    Args:
+        normalized_name: Normalized channel name
+        
+    Returns:
+        List of name variations to try, in order of likelihood
+    """
+    variations = []
+    seen = set()
+    
+    # Extended country suffixes (2-letter and full names)
+    country_suffixes_2letter = ['-us', '-ca', '-uk', '-au', '-fr', '-de', '-es', '-it', '-mx', '-br', '-pt', '-pl', '-nl', '-be', '-ie', '-nz', '-za', '-jp', '-kr', '-cn', '-in']
+    country_suffixes_full = ['-united-states', '-canada', '-united-kingdom', '-australia', '-france', '-germany', '-spain', '-italy', '-portugal', '-poland', '-netherlands', '-belgium']
+    all_country_suffixes = country_suffixes_2letter + country_suffixes_full
+    
+    # Quality suffixes to remove
+    quality_suffixes = ['-hd', '-sd', '-4k', '-uhd', '-fhd', '-uhd', '-hq']
+    
+    # Country code mappings (common variations)
+    country_code_mappings = {
+        '-pl': ['-pt', '-poland'],  # Poland sometimes confused with Portugal
+        '-pt': ['-pl', '-portugal'],
+        '-be': ['-belgium'],
+        '-nl': ['-netherlands'],
+        '-uk': ['-united-kingdom', '-gb'],
+        '-us': ['-united-states'],
+        '-ca': ['-canada'],
+        '-au': ['-australia'],
+    }
+    
+    base_name = normalized_name
+    extracted_country = None
+    extracted_quality = None
+    numeric_suffix = None
+    
+    # First, remove quality suffixes (they often interfere with matching)
+    for suffix in quality_suffixes:
+        if base_name.endswith(suffix):
+            base_name = base_name[:-len(suffix)]
+            extracted_quality = suffix
+            # Remove trailing hyphen if present
+            base_name = base_name.rstrip('-')
+            break
+    
+    # Check if name ends with a country suffix followed by numbers (e.g., "us2", "ca3")
+    # Pattern: country code + optional numbers
+    country_with_numbers_pattern = re.compile(r'(.+?)(-us|-ca|-uk|-au|-pt|-pl|-be|-nl|-es|-fr|-de|-it|-mx|-br)(\d+)$')
+    match = country_with_numbers_pattern.match(base_name)
+    if match:
+        # Extract base, country code, and numeric suffix
+        base_name = match.group(1)
+        extracted_country = match.group(2)  # e.g., "-us"
+        numeric_suffix = match.group(3)  # e.g., "2"
+        # Remove trailing hyphen if present
+        base_name = base_name.rstrip('-')
+    else:
+        # Check if name ends with a country suffix (without numbers)
+        for suffix in all_country_suffixes:
+            if base_name.endswith(suffix):
+                base_name = base_name[:-len(suffix)]
+                extracted_country = suffix
+                # Remove trailing hyphen if present
+                base_name = base_name.rstrip('-')
+                break
+    
+    # Variation 1: Original normalized name (highest priority)
+    if normalized_name and normalized_name not in seen:
+        variations.append(normalized_name)
+        seen.add(normalized_name)
+    
+    # Variation 2: Base name without suffixes (no quality, no country)
+    if base_name and base_name != normalized_name and base_name not in seen:
+        variations.append(base_name)
+        seen.add(base_name)
+    
+    # Variation 3: Base name with extracted country suffix (if we removed one)
+    if extracted_country and base_name:
+        # First try without numeric suffix (most common case)
+        variant = f"{base_name}{extracted_country}"
+        if variant not in seen:
+            variations.append(variant)
+            seen.add(variant)
+        
+        # If there was a numeric suffix, also try with it (less common but sometimes exists)
+        if numeric_suffix:
+            variant_with_num = f"{base_name}{extracted_country}{numeric_suffix}"
+            if variant_with_num not in seen:
+                variations.append(variant_with_num)
+                seen.add(variant_with_num)
+        
+        # Also try country code alternatives (without numeric suffix)
+        if extracted_country in country_code_mappings:
+            for alt_country in country_code_mappings[extracted_country]:
+                variant = f"{base_name}{alt_country}"
+                if variant not in seen:
+                    variations.append(variant)
+                    seen.add(variant)
+    
+    # Variation 4: Base name with common country suffixes (if we didn't extract one)
+    if not extracted_country and base_name:
+        for suffix in ['-us', '-ca', '-uk', '-au', '-pt', '-pl', '-be', '-nl', '-es', '-fr', '-de', '-it']:
+            variant = f"{base_name}{suffix}"
+            if variant not in seen:
+                variations.append(variant)
+                seen.add(variant)
+    
+    # Variation 5: Base name without quality suffix but with country codes
+    if extracted_quality and base_name:
+        # Try with original country if we had one
+        if extracted_country:
+            variant = f"{base_name}{extracted_country}"
+            if variant not in seen:
+                variations.append(variant)
+                seen.add(variant)
+            # Try alternatives
+            if extracted_country in country_code_mappings:
+                for alt_country in country_code_mappings[extracted_country]:
+                    variant = f"{base_name}{alt_country}"
+                    if variant not in seen:
+                        variations.append(variant)
+                        seen.add(variant)
+        else:
+            # Try common country codes
+            for suffix in ['-us', '-ca', '-uk', '-au', '-pt', '-pl', '-be', '-nl']:
+                variant = f"{base_name}{suffix}"
+                if variant not in seen:
+                    variations.append(variant)
+                    seen.add(variant)
+    
+    # Variation 6: Original name with common country suffixes added
+    if normalized_name:
+        for suffix in ['-us', '-ca', '-uk', '-au', '-pt', '-pl', '-be', '-nl']:
+            variant = f"{normalized_name}{suffix}"
+            if variant not in seen:
+                variations.append(variant)
+                seen.add(variant)
+    
+    # Variation 7: Try removing common words that might not be in filenames
+    common_words = ['network', 'channel', 'tv', 'television', 'broadcast', 'sports']
+    for word in common_words:
+        if f"-{word}" in base_name:
+            variant = base_name.replace(f"-{word}", "")
+            if variant and variant not in seen:
+                variations.append(variant)
+                seen.add(variant)
+                # Also try with country codes
+                if extracted_country:
+                    variant_with_country = f"{variant}{extracted_country}"
+                    if variant_with_country not in seen:
+                        variations.append(variant_with_country)
+                        seen.add(variant_with_country)
+        elif base_name.startswith(f"{word}-"):
+            variant = base_name.replace(f"{word}-", "")
+            if variant and variant not in seen:
+                variations.append(variant)
+                seen.add(variant)
+                # Also try with country codes
+                if extracted_country:
+                    variant_with_country = f"{variant}{extracted_country}"
+                    if variant_with_country not in seen:
+                        variations.append(variant_with_country)
+                        seen.add(variant_with_country)
+    
+    return variations
+
+def generate_tv_logos_urls(tvg_id: str, tvg_name: str = "", max_urls: int = MAX_FALLBACK_URLS) -> list[str]:
+    """
+    Generate potential tv-logos GitHub URLs for a channel with fuzzy matching.
+    
+    Tries multiple naming patterns, variations, and path structures to find matching logos
+    in the tv-logos repository. Uses fuzzy matching to handle variations in naming.
+    Limits the number of URLs to prevent excessive requests.
+    
+    Args:
+        tvg_id: Channel identifier
+        tvg_name: Channel name (optional, used as fallback)
+        max_urls: Maximum number of URLs to generate (default: MAX_FALLBACK_URLS)
+        
+    Returns:
+        List of potential GitHub raw URLs to try, in order of likelihood (limited to max_urls)
+    """
+    urls = []
+    seen = set()
+    
+    # Normalize both tvg_id and tvg_name
+    normalized_id = normalize_channel_name_for_logo(tvg_id)
+    normalized_name = normalize_channel_name_for_logo(tvg_name) if tvg_name else ""
+    
+    # Prioritized country codes (most common first)
+    # Start with fewer countries, expand if needed
+    primary_countries = ["united-states", "us", "portugal", "pt", "poland", "pl", "canada", "ca", "united-kingdom", "uk"]
+    secondary_countries = ["australia", "au", "belgium", "be", "netherlands", "nl", "spain", "es", "france", "fr", "germany", "de", "italy", "it"]
+    all_countries = primary_countries + secondary_countries + ["international", "int"]
+    
+    # Generate name variations for fuzzy matching (limit to most likely ones)
+    id_variations = generate_name_variations(normalized_id) if normalized_id else []
+    name_variations = generate_name_variations(normalized_name) if normalized_name else []
+    
+    # Combine variations, prioritizing tvg_id variations
+    # Limit variations to most likely matches (first 5-6 variations are usually enough)
+    all_variations = []
+    max_variations_per_source = 5
+    for i, var in enumerate(id_variations[:max_variations_per_source]):
+        if var not in all_variations:
+            all_variations.append(var)
+    for i, var in enumerate(name_variations[:max_variations_per_source]):
+        if var not in all_variations:
+            all_variations.append(var)
+    
+    # If no variations generated, use normalized names as fallback
+    if not all_variations:
+        if normalized_id:
+            all_variations.append(normalized_id)
+        if normalized_name and normalized_name != normalized_id:
+            all_variations.append(normalized_name)
+    
+    # Generate URLs for each variation, prioritizing most likely paths
+    # Stop early if we've generated enough URLs
+    for variation in all_variations:
+        if not variation or len(urls) >= max_urls:
+            break
+        
+        # Pattern 1: countries/{country}/{variation}.png (most common)
+        # Try primary countries first
+        for country in primary_countries:
+            if len(urls) >= max_urls:
+                break
+            url = f"{GITHUB_TV_LOGOS_RAW_BASE}countries/{country}/{variation}.png"
+            if url not in seen:
+                urls.append(url)
+                seen.add(url)
+        
+        # If we still have room, try secondary countries
+        if len(urls) < max_urls:
+            for country in secondary_countries:
+                if len(urls) >= max_urls:
+                    break
+                url = f"{GITHUB_TV_LOGOS_RAW_BASE}countries/{country}/{variation}.png"
+                if url not in seen:
+                    urls.append(url)
+                    seen.add(url)
+        
+        # Pattern 2: networks/{variation}.png (only if we have room)
+        if len(urls) < max_urls:
+            url = f"{GITHUB_TV_LOGOS_RAW_BASE}networks/{variation}.png"
+            if url not in seen:
+                urls.append(url)
+                seen.add(url)
+        
+        # Pattern 3: {variation}.png (root level, least common - only for first variation)
+        if variation == all_variations[0] and len(urls) < max_urls:
+            url = f"{GITHUB_TV_LOGOS_RAW_BASE}{variation}.png"
+            if url not in seen:
+                urls.append(url)
+                seen.add(url)
+    
+    return urls[:max_urls]  # Ensure we don't exceed max_urls
+
+async def fetch_image_content(redis_store: RedisStore, url: str, check_negative_cache: bool = True) -> bytes:
     """
     Fetch image content from URL with caching support and retry logic.
     
     Checks in this order:
-    1. Redis cache
-    2. Local tv-logos repository (if enabled and URL matches)
-    3. HTTP fetch with retry logic
+    1. Redis cache (positive results)
+    2. Negative cache (404s) if check_negative_cache is True
+    3. Local tv-logos repository (if enabled and URL matches)
+    4. HTTP fetch with retry logic
     
     Implements retry logic with exponential backoff for rate limiting (429 errors).
     Caches successful fetches for future use.
+    Also caches negative results (404s) to avoid retrying failed URLs.
     
     Args:
         redis_store: RedisStore instance for caching
         url: URL of the image to fetch
+        check_negative_cache: If True, check for cached 404 results (default: True)
         
     Returns:
         Image content as bytes, or empty bytes if fetch fails after retries
@@ -838,8 +1196,20 @@ async def fetch_image_content(redis_store: RedisStore, url: str) -> bytes:
         logger.debug(f"Returning cached image content for {url}")
         return cached_content
     
-    # Try local repository first (for GitHub tv-logos URLs)
+    # Check negative cache (404s) to avoid retrying failed URLs
+    if check_negative_cache:
+        negative_cache_key = f"image_cache_negative:{url}"
+        negative_cached = redis_store.get(negative_cache_key)
+        if negative_cached:
+            logger.debug(f"Skipping URL with cached negative result (404): {url}")
+            return b''
+    
+    # Try local repository first (for GitHub tv-logos URLs - both blob and raw formats)
     local_path = github_url_to_local_path(url)
+    if not local_path:
+        # Also try raw URL format
+        local_path = github_raw_url_to_local_path(url)
+    
     if local_path:
         logger.debug(f"Checking local repository for: {url}")
         local_content = read_local_image(local_path)
@@ -899,6 +1269,11 @@ async def fetch_image_content(redis_store: RedisStore, url: str) -> bytes:
         except httpx.HTTPStatusError as e:
             # For non-429 errors, don't retry
             if e.response.status_code != 429:
+                # Cache 404 errors to avoid retrying
+                if e.response.status_code == 404 and check_negative_cache:
+                    negative_cache_key = f"image_cache_negative:{url}"
+                    redis_store.set(negative_cache_key, b'404', expiration_time=NEGATIVE_CACHE_EXPIRATION)
+                    logger.debug(f"Cached negative result (404) for {url}")
                 logger.warning(f"HTTP status error fetching image from {url}: {e}")
                 return b''
             # 429 errors should be caught above, but handle here as fallback
@@ -948,7 +1323,8 @@ async def process_image(
     width: int, 
     height: int, 
     image_type: str, 
-    monochrome: bool = False
+    monochrome: bool = False,
+    tvg_name: str | None = None
 ) -> BytesIO:
     """
     Process and resize an image for a specific use case.
@@ -984,7 +1360,6 @@ async def process_image(
     # Include image_url hash in cache key so logo overrides get their own cache entries
     # Include placeholder version for placeholder images to invalidate cache when generation changes
     is_placeholder = image_url == GENERIC_PLACEHOLDER_URL
-    import hashlib
     # Create a short hash of the image URL to include in cache key (for logo overrides)
     # This ensures that when logo override changes, cache is invalidated
     image_url_hash = hashlib.md5(image_url.encode()).hexdigest()[:8]
@@ -1004,8 +1379,63 @@ async def process_image(
         return processed_image
 
     content = await fetch_image_content(redis_store, image_url)
-    if not content:
-        # Generate placeholder when fetch fails - use versioned cache key
+    
+    # If original fetch failed and we have channel info, try fallback sources
+    if not content and (tvg_id or tvg_name or title):
+        logger.info(f"Original image fetch failed for {tvg_id}, trying fallback sources...")
+        fallback_urls = generate_tv_logos_urls(tvg_id, tvg_name or title)
+        
+        # Try fallback URLs concurrently for better performance
+        # Limit concurrent requests to avoid overwhelming the server
+        max_concurrent = 5
+        fallback_url_used = None
+        
+        # Split URLs into batches for concurrent processing
+        for i in range(0, len(fallback_urls), max_concurrent):
+            batch = fallback_urls[i:i + max_concurrent]
+            
+            # Create tasks for concurrent fetching
+            tasks = [fetch_image_content(redis_store, url, check_negative_cache=True) for url in batch]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Check results in order
+            for url, result in zip(batch, results):
+                if isinstance(result, Exception):
+                    logger.debug(f"Fallback URL failed with exception: {url} - {result}")
+                    continue
+                
+                if result:  # Success!
+                    logger.info(f"Successfully fetched logo from fallback source: {url}")
+                    fallback_url_used = url
+                    content = result
+                    # Update cache key to reflect the fallback URL used
+                    image_url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
+                    cache_key = f"{tvg_id}_{image_type}_{image_url_hash}"
+                    # Check if we already have a processed image for this fallback URL
+                    cached_image = redis_store.get_processed_image(cache_key)
+                    if cached_image:
+                        logger.info(f"Returning cached processed image for fallback {cache_key}")
+                        return BytesIO(cached_image)
+                    break
+            
+            # If we found content, stop trying more URLs
+            if content:
+                break
+        
+        # If still no content after fallbacks, generate placeholder
+        if not content:
+            logger.info(f"All fallback attempts failed for {tvg_id}, generating {image_type} placeholder")
+            placeholder_cache_key = f"{cache_key}_placeholder_{PLACEHOLDER_CACHE_VERSION}"
+            cached_placeholder = redis_store.get_processed_image(placeholder_cache_key)
+            if cached_placeholder:
+                logger.info(f"Returning cached placeholder for {placeholder_cache_key}")
+                return BytesIO(cached_placeholder)
+            
+            processed_image = generate_placeholder_image(title, width, height, monochrome, image_type)
+            redis_store.store_processed_image(placeholder_cache_key, processed_image.getvalue())
+            return processed_image
+    elif not content:
+        # Generate placeholder when fetch fails and no fallback info available
         logger.info(f"Image fetch failed for {tvg_id} ({image_url[:50]}...), generating {image_type} placeholder")
         placeholder_cache_key = f"{cache_key}_placeholder_{PLACEHOLDER_CACHE_VERSION}"
         cached_placeholder = redis_store.get_processed_image(placeholder_cache_key)
@@ -1127,7 +1557,7 @@ async def process_image(
         redis_store.store_processed_image(placeholder_cache_key, processed_image.getvalue())
         return processed_image
 
-async def get_poster(redis_store: RedisStore, tvg_id: str, image_url: str, title: str) -> BytesIO:
+async def get_poster(redis_store: RedisStore, tvg_id: str, image_url: str, title: str, tvg_name: str | None = None) -> BytesIO:
     """
     Get a poster image (portrait format).
     
@@ -1136,13 +1566,14 @@ async def get_poster(redis_store: RedisStore, tvg_id: str, image_url: str, title
         tvg_id: Channel identifier
         image_url: URL of the image
         title: Title for placeholder if needed
+        tvg_name: Channel name for fallback logo lookup (optional)
         
     Returns:
         BytesIO object containing the poster image
     """
-    return await process_image(redis_store, tvg_id, image_url, title, POSTER_WIDTH, POSTER_HEIGHT, "poster")
+    return await process_image(redis_store, tvg_id, image_url, title, POSTER_WIDTH, POSTER_HEIGHT, "poster", tvg_name=tvg_name)
 
-async def get_background(redis_store: RedisStore, tvg_id: str, image_url: str, title: str) -> BytesIO:
+async def get_background(redis_store: RedisStore, tvg_id: str, image_url: str, title: str, tvg_name: str | None = None) -> BytesIO:
     """
     Get a background image (widescreen format).
     
@@ -1151,13 +1582,14 @@ async def get_background(redis_store: RedisStore, tvg_id: str, image_url: str, t
         tvg_id: Channel identifier
         image_url: URL of the image
         title: Title for placeholder if needed
+        tvg_name: Channel name for fallback logo lookup (optional)
         
     Returns:
         BytesIO object containing the background image
     """
-    return await process_image(redis_store, tvg_id, image_url, title, BACKGROUND_WIDTH, BACKGROUND_HEIGHT, "background")
+    return await process_image(redis_store, tvg_id, image_url, title, BACKGROUND_WIDTH, BACKGROUND_HEIGHT, "background", tvg_name=tvg_name)
 
-async def get_logo(redis_store: RedisStore, tvg_id: str, image_url: str, title: str) -> BytesIO:
+async def get_logo(redis_store: RedisStore, tvg_id: str, image_url: str, title: str, tvg_name: str | None = None) -> BytesIO:
     """
     Get a logo image (square format).
     
@@ -1166,13 +1598,14 @@ async def get_logo(redis_store: RedisStore, tvg_id: str, image_url: str, title: 
         tvg_id: Channel identifier
         image_url: URL of the image
         title: Title for placeholder if needed
+        tvg_name: Channel name for fallback logo lookup (optional)
         
     Returns:
         BytesIO object containing the logo image
     """
-    return await process_image(redis_store, tvg_id, image_url, title, LOGO_WIDTH, LOGO_HEIGHT, "logo")
+    return await process_image(redis_store, tvg_id, image_url, title, LOGO_WIDTH, LOGO_HEIGHT, "logo", tvg_name=tvg_name)
 
-async def get_icon(redis_store: RedisStore, tvg_id: str, image_url: str, title: str) -> BytesIO:
+async def get_icon(redis_store: RedisStore, tvg_id: str, image_url: str, title: str, tvg_name: str | None = None) -> BytesIO:
     """
     Get an icon image (square format, monochrome).
     
@@ -1181,8 +1614,9 @@ async def get_icon(redis_store: RedisStore, tvg_id: str, image_url: str, title: 
         tvg_id: Channel identifier
         image_url: URL of the image
         title: Title for placeholder if needed
+        tvg_name: Channel name for fallback logo lookup (optional)
         
     Returns:
         BytesIO object containing the icon image (grayscale)
     """
-    return await process_image(redis_store, tvg_id, image_url, title, ICON_WIDTH, ICON_HEIGHT, "icon", monochrome=True)
+    return await process_image(redis_store, tvg_id, image_url, title, ICON_WIDTH, ICON_HEIGHT, "icon", monochrome=True, tvg_name=tvg_name)

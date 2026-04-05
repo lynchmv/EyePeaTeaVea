@@ -24,13 +24,66 @@ services:
       # Disable SSL verification for problematic CDNs (set via .env)
       DISABLE_SSL_VERIFY: ${DISABLE_SSL_VERIFY:-true}
       # ADDON_PASSWORD: your_addon_password # Uncomment and set in .env for production
+      # Observability settings
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      METRICS_ENABLED: ${METRICS_ENABLED:-true}
     depends_on:
       - redis
     networks:
       - eyepeateavea_network
 
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    hostname: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+      - '--web.external-url=https://stremio-dev.lynuxss.com/prometheus/'
+      - '--web.route-prefix=/'
+    depends_on:
+      - app
+    networks:
+      - eyepeateavea_network
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:10.4.0
+    hostname: grafana
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # Subpath and reverse proxy configuration
+      GF_SERVER_ROOT_URL: "https://stremio-dev.lynuxss.com/grafana"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_SERVER_PROTOCOL: "http"
+      GF_SERVER_DOMAIN: "stremio-dev.lynuxss.com"
+      # Trust the reverse proxy headers
+      GF_SECURITY_COOKIE_SECURE: "true"
+      GF_SECURITY_COOKIE_SAMESITE: "lax"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - eyepeateavea_network
+
 volumes:
   redis_data:
+  prometheus_data:
+  grafana_data:
 
 networks:
   eyepeateavea_network:

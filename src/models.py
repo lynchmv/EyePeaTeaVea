@@ -179,6 +179,8 @@ class SystemStats(BaseModel):
     total_users: int
     total_channels: int
     total_events: int
+    unique_channels: int = 0
+    unique_events: int = 0
     active_scheduler_jobs: int
     redis_memory_used: int | None = None
     redis_memory_max: int | None = None

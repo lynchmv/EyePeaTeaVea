@@ -621,10 +621,32 @@ async def get_system_stats(
     
     total_channels = 0
     total_events = 0
+    unique_stream_urls = set()
+    unique_event_titles = set()
+    
     for secret_str in all_secret_strs:
         channels = redis_store.get_all_channels(secret_str)
         total_channels += len(channels)
-        total_events += sum(1 for c in channels.values() if json.loads(c).get("is_event", False))
+        for channel_json in channels.values():
+            try:
+                channel = json.loads(channel_json)
+                stream_url = channel.get("stream_url", "")
+                is_event = channel.get("is_event", False)
+                
+                if is_event:
+                    total_events += 1
+                    # Use event_title for uniqueness since multiple events can share same stream
+                    event_title = channel.get("event_title", "")
+                    if event_title:
+                        unique_event_titles.add(event_title)
+                else:
+                    if stream_url:
+                        unique_stream_urls.add(stream_url)
+            except json.JSONDecodeError:
+                continue
+    
+    unique_channels = len(unique_stream_urls)
+    unique_events = len(unique_event_titles)
     
     # Get Redis memory info
     redis_memory_used = None
@@ -648,6 +670,8 @@ async def get_system_stats(
         total_users=total_users,
         total_channels=total_channels,
         total_events=total_events,
+        unique_channels=unique_channels,
+        unique_events=unique_events,
         active_scheduler_jobs=active_jobs,
         redis_memory_used=redis_memory_used,
         redis_memory_max=redis_memory_max,

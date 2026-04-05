@@ -6,6 +6,7 @@ This module defines the main FastAPI application with all API endpoints:
 - Stremio protocol endpoints (/manifest.json, /catalog, /meta, /stream)
 - Image endpoints (/poster, /background, /logo, /icon)
 - Health check endpoint (/health)
+- Metrics endpoint (/metrics)
 - Frontend web UI (/frontend)
 
 Features:
@@ -13,6 +14,7 @@ Features:
 - Rate limiting on configuration endpoint
 - CORS configuration for Stremio compatibility
 - Automatic M3U playlist fetching and scheduling
+- Prometheus metrics and structured JSON logging
 """
 import os
 import json
@@ -28,6 +30,13 @@ import pytz
 from dotenv import load_dotenv
 from urllib.parse import urljoin, unquote
 
+# Load environment variables first
+load_dotenv()
+
+# Set up structured logging before any other imports that might log
+from .observability import setup_logging, setup_metrics, get_scheduler_health, update_gauge_metrics
+setup_logging()
+
 from .redis_store import RedisStore, RedisConnectionError
 from .models import UserData, ConfigureRequest, UpdateConfigureRequest
 from .utils import generate_secret_str, hash_secret_str, validate_secret_str, hash_password, validate_url
@@ -36,9 +45,6 @@ from .image_processor import get_poster, get_background, get_logo, get_icon, clo
 from .catalog_utils import filter_channels, create_meta, create_empty_meta
 from .admin import admin_router, set_scheduler
 
-load_dotenv()
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 from contextlib import asynccontextmanager
@@ -146,6 +152,9 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+
+# Set up Prometheus metrics
+setup_metrics(app, app_version=ADDON_VERSION)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -435,8 +444,11 @@ async def get_image_response(
                 title = title.split("\n")[0]
         else:
             title = channel["tvg_name"]
+        
+        # Get tvg_name for fallback logo lookup
+        tvg_name = channel.get("tvg_name", "")
 
-        processed_image_bytes = await image_processor_func(redis_store, tvg_id, image_url, title)
+        processed_image_bytes = await image_processor_func(redis_store, tvg_id, image_url, title, tvg_name=tvg_name)
     if not processed_image_bytes.getvalue():
         raise HTTPException(
             status_code=500, 
@@ -477,6 +489,7 @@ async def health_check():
     Returns detailed health status including:
     - Overall service status
     - Redis connectivity and metrics
+    - Scheduler status and job information
     - Configuration status
     - Service metadata
     - User and channel statistics
@@ -489,6 +502,10 @@ async def health_check():
         "checks": {}
     }
 
+    total_users = None
+    total_channels = None
+    unique_channels = None
+
     # Check Redis connectivity
     try:
         is_connected = redis_store.is_connected()
@@ -499,13 +516,31 @@ async def health_check():
                 
                 # Get some metrics
                 try:
-                    total_users = len(redis_store.get_all_secret_strs())
-                    # Count total channels (approximate - count keys)
-                    channel_keys = list(redis_store.redis_client.scan_iter(match="channel:*"))
-                    total_channels = len(channel_keys)
+                    all_secret_strs = redis_store.get_all_secret_strs()
+                    total_users = len(all_secret_strs)
+                    
+                    # Count total and unique channels
+                    total_channels = 0
+                    unique_stream_urls = set()
+                    for secret_str in all_secret_strs:
+                        channels = redis_store.get_all_channels(secret_str)
+                        total_channels += len(channels)
+                        for channel_json in channels.values():
+                            try:
+                                channel = json.loads(channel_json)
+                                stream_url = channel.get("stream_url", "")
+                                if stream_url:
+                                    unique_stream_urls.add(stream_url)
+                            except json.JSONDecodeError:
+                                continue
+                    unique_channels = len(unique_stream_urls)
+                    
+                    # Update Prometheus gauge metrics (using unique for the gauge)
+                    update_gauge_metrics(user_count=total_users, channel_count=unique_channels)
                 except Exception:
                     total_users = None
                     total_channels = None
+                    unique_channels = None
                 
                 health_status["checks"]["redis"] = {
                     "status": "healthy",
@@ -513,7 +548,8 @@ async def health_check():
                     "url": REDIS_URL.split("@")[-1] if "@" in REDIS_URL else REDIS_URL,  # Hide credentials
                     "metrics": {
                         "total_users": total_users,
-                        "total_channels": total_channels
+                        "total_channel_entries": total_channels,
+                        "unique_channels": unique_channels
                     }
                 }
             except Exception as e:
@@ -535,6 +571,25 @@ async def health_check():
             "error": str(e)
         }
         health_status["status"] = "unhealthy"
+
+    # Check scheduler status
+    try:
+        scheduler_health = get_scheduler_health(scheduler)
+        health_status["checks"]["scheduler"] = scheduler_health
+        
+        if scheduler_health.get("status") == "unhealthy":
+            if health_status["status"] == "healthy":
+                health_status["status"] = "degraded"
+        elif scheduler_health.get("status") == "stopped":
+            if health_status["status"] == "healthy":
+                health_status["status"] = "degraded"
+    except Exception as e:
+        health_status["checks"]["scheduler"] = {
+            "status": "unhealthy",
+            "error": str(e)
+        }
+        if health_status["status"] == "healthy":
+            health_status["status"] = "degraded"
 
     # Check configuration
     try:
@@ -835,7 +890,10 @@ async def get_icon_image(secret_str: str, tvg_id: str, user_data: UserData = Dep
                 channel_name = channel_name.split("\n")[0]
         else:
             channel_name = channel["tvg_name"]
-        processed_image_bytes = await get_icon(redis_store, tvg_id, image_url, channel_name)
+        
+        # Get tvg_name for fallback logo lookup
+        tvg_name = channel.get("tvg_name", "")
+        processed_image_bytes = await get_icon(redis_store, tvg_id, image_url, channel_name, tvg_name=tvg_name)
 
     if not processed_image_bytes.getvalue():
         raise HTTPException(

@@ -377,7 +377,9 @@ async function loadDashboard() {
             const stats = await statsResponse.json();
             document.getElementById('statUsers').textContent = stats.total_users || 0;
             document.getElementById('statChannels').textContent = stats.total_channels || 0;
+            document.getElementById('statUniqueChannels').textContent = stats.unique_channels || 0;
             document.getElementById('statEvents').textContent = stats.total_events || 0;
+            document.getElementById('statUniqueEvents').textContent = stats.unique_events || 0;
             document.getElementById('statJobs').textContent = stats.active_scheduler_jobs || 0;
         }
         
