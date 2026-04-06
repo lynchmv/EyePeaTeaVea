@@ -124,7 +124,8 @@ class M3UParser:
         s = re.sub(r"[^A-Za-z0-9: \-/]", " ", s)
 
         # 5️⃣ Parse to datetime
-        dt = dateparser.parse(s)
+        # Force MDY to avoid Linux assuming '04/06/26' means 2004 or 1926.
+        dt = dateparser.parse(s, settings={'DATE_ORDER': 'MDY', 'PREFER_DATES_FROM': 'future'})
 
         if not dt:
             return None
@@ -299,9 +300,10 @@ class M3UParser:
                 event_datetime = self.extract_event_datetime(tvg_name)
                 logger.debug(f"Parsing event: {tvg_name}, parsed_datetime: {event_datetime}")
                 if event_datetime:
-                    # Check if the event is in the past
-                    if event_datetime < datetime.now(pytz.utc):
-                        continue # Skip to the next channel if the event is in the past
+                    # Check if the event is deeply in the past (e.g. 6 hours) so we don't drop active/ongoing events
+                    from datetime import timedelta
+                    if event_datetime < (datetime.now(pytz.utc) - timedelta(hours=6)):
+                        continue # Skip to the next channel if the event is deeply in the past
                     event_datetime_full = event_datetime.strftime("%Y-%m-%d %H:%M:%S")
                     
                     # Convert to user timezone for display
