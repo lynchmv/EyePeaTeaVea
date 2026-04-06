@@ -1087,30 +1087,44 @@ async def get_meta(secret_str: str, type: str, id: str, user_data: UserData = De
                         
                         if current_program:
                             start_dt = current_program.get("_start_dt")
-                            if start_dt:
-                                # Convert to user's timezone
+                            stop_dt = current_program.get("_stop_dt")
+                            if start_dt and stop_dt:
+                                start_dt_local = start_dt.astimezone(user_tz)
+                                stop_dt_local = stop_dt.astimezone(user_tz)
+                                start_time = start_dt_local.strftime("%I:%M %p")
+                                stop_time = stop_dt_local.strftime("%I:%M %p")
+                                time_str = f"{start_time} - {stop_time}"
+                            elif start_dt:
                                 start_dt_local = start_dt.astimezone(user_tz)
                                 start_time = start_dt_local.strftime("%I:%M %p")
+                                time_str = f"Starts {start_time}"
                             else:
-                                start_time = ""
+                                time_str = "Ongoing"
+                            
                             desc_text = current_program.get("desc", "")
+                            description_parts.append(f"\n\n**▶ NOW PLAYING** ({time_str})\n**{current_program['title']}**")
                             if desc_text:
-                                description_parts.append(f"\n\nNow: {current_program['title']} ({start_time})")
-                                description_parts.append(f"{desc_text}")
-                            else:
-                                description_parts.append(f"\n\nNow: {current_program['title']} ({start_time})")
+                                description_parts.append(f"_{desc_text}_")
                         
                         if upcoming_programs:
-                            description_parts.append("\n\nUpcoming:")
+                            description_parts.append("\n\n**UPCOMING**")
                             for prog in upcoming_programs:
                                 start_dt = prog.get("_start_dt")
-                                if start_dt:
-                                    # Convert to user's timezone
+                                stop_dt = prog.get("_stop_dt")
+                                if start_dt and stop_dt:
+                                    start_dt_local = start_dt.astimezone(user_tz)
+                                    stop_dt_local = stop_dt.astimezone(user_tz)
+                                    start_time = start_dt_local.strftime("%I:%M %p")
+                                    stop_time = stop_dt_local.strftime("%I:%M %p")
+                                    time_str = f"{start_time} - {stop_time}"
+                                elif start_dt:
                                     start_dt_local = start_dt.astimezone(user_tz)
                                     start_time = start_dt_local.strftime("%I:%M %p")
+                                    time_str = f"{start_time}"
                                 else:
-                                    start_time = ""
-                                description_parts.append(f"• {prog['title']} ({start_time})")
+                                    time_str = ""
+                                    
+                                description_parts.append(f"• **{time_str}** | {prog['title']}")
                         
                         meta["description"] = "\n".join(description_parts)
                         

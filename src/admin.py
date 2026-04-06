@@ -1424,6 +1424,13 @@ async def get_user_events(
         }
     }
 
+@user_router.get("/{secret_str}/api/epg")
+async def get_user_epg(secret_str: str):
+    """Get the full EPG program mapping available to the user."""
+    verify_user_secret_str(secret_str)
+    epg_data = redis_store.get_epg_data(secret_str)
+    return {"epg": epg_data or {}}
+
 @user_router.get("/{secret_str}/api/logo-overrides")
 async def get_user_logo_overrides(secret_str: str):
     """Get user's logo overrides."""

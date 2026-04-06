@@ -52,6 +52,9 @@ async function loadDashboard() {
         // Load logo overrides
         await loadLogoOverrides();
         
+        // Load EPG explicitly first
+        await loadEpgData();
+
         // Load channels and events
         await loadChannels();
         await loadEvents();
@@ -63,6 +66,21 @@ async function loadDashboard() {
     } catch (error) {
         console.error('Error loading dashboard:', error);
         showError(error.message);
+    }
+}
+
+async function loadEpgData() {
+    try {
+        const response = await fetch(`${API_BASE}/epg`);
+        if (response.ok) {
+            const data = await response.json();
+            window.epgData = data.epg || {};
+        } else {
+            window.epgData = {};
+        }
+    } catch (e) {
+        console.error("Failed to fetch EPG from API", e);
+        window.epgData = {};
     }
 }
 
@@ -318,15 +336,52 @@ function displayChannels(channels, pagination) {
         const logoUrl = channel.tvg_logo || '';
         const delay = (index % 15) * 0.05;
         
+        let nowPlayingHtml = '';
+        if (window.epgData && window.epgData[tvgId]) {
+            const programs = window.epgData[tvgId];
+            const now = new Date();
+            let currentProg = null;
+            
+            for (const prog of programs) {
+                try {
+                    let startStr = prog.start;
+                    let stopStr = prog.stop;
+                    if (startStr && !startStr.includes('Z') && !startStr.includes('+')) startStr += 'Z';
+                    if (stopStr && !stopStr.includes('Z') && !stopStr.includes('+')) stopStr += 'Z';
+                    
+                    const start = new Date(startStr);
+                    const stop = stopStr ? new Date(stopStr) : null;
+                    if (start <= now && (!stop || stop >= now)) {
+                        currentProg = prog;
+                        break;
+                    }
+                } catch (e) {}
+            }
+            
+            if (currentProg) {
+                nowPlayingHtml = `
+                    <div class="mt-2 w-100">
+                        <div class="small d-flex justify-content-between align-items-center" style="background: rgba(16, 185, 129, 0.15); padding: 4px 8px; border-radius: 6px; border-left: 3px solid #10b981;">
+                            <div class="text-truncate" style="color: #10b981; max-width: 80%;"><i class="bi bi-play-circle-fill me-1"></i>${escapeHtml(currentProg.title)}</div>
+                            <span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #10b981;">Now</span>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+        
         html += `<div class="col">
             <div class="card h-100 channel-card" style="animation: fadeInUp 0.5s ease-out forwards; opacity: 0; animation-delay: ${delay}s">
-                <div class="card-body d-flex align-items-center">
-                    ${logoUrl ? `<img src="${escapeHtml(logoUrl)}" class="me-3" alt="Logo" style="width: 50px; height: 50px; object-fit: contain; background: rgba(0,0,0,0.2); border-radius: 8px; padding: 5px;" onerror="this.style.display='none'">` : '<div class="me-3" style="width: 50px; height: 50px; background: rgba(0,0,0,0.2); border-radius: 8px; display: flex; align-items: center; justify-content: center;"><i class="bi bi-tv text-muted"></i></div>'}
-                    <div style="min-width: 0;">
-                        <h6 class="mb-1 text-truncate" title="${tvgName}"><strong>${tvgName}</strong></h6>
-                        <span class="badge bg-secondary mb-1">${groupTitle}</span>
-                        <div class="small text-muted text-truncate" title="${tvgId}"><code>${tvgId}</code></div>
+                <div class="card-body d-flex flex-column justify-content-center">
+                    <div class="d-flex align-items-center w-100">
+                        ${logoUrl ? `<img src="${escapeHtml(logoUrl)}" class="me-3" alt="Logo" style="width: 50px; height: 50px; object-fit: contain; background: rgba(0,0,0,0.2); border-radius: 8px; padding: 5px;" onerror="this.style.display='none'">` : '<div class="me-3" style="width: 50px; height: 50px; background: rgba(0,0,0,0.2); border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="bi bi-tv text-muted"></i></div>'}
+                        <div style="min-width: 0; flex-grow: 1;">
+                            <h6 class="mb-1 text-truncate" title="${tvgName}"><strong>${tvgName}</strong></h6>
+                            <span class="badge bg-secondary mb-1">${groupTitle}</span>
+                            <div class="small text-muted text-truncate" title="${tvgId}"><code>${tvgId}</code></div>
+                        </div>
                     </div>
+                    ${nowPlayingHtml}
                 </div>
             </div>
         </div>`;
