@@ -125,10 +125,25 @@ class M3UParser:
 
         # 5️⃣ Parse to datetime
         # Force MDY to avoid Linux assuming '04/06/26' means 2004 or 1926.
-        dt = dateparser.parse(s, settings={'DATE_ORDER': 'MDY', 'PREFER_DATES_FROM': 'future'})
+        dt = dateparser.parse(s, settings={'DATE_ORDER': 'MDY'})
 
         if not dt:
             return None
+
+        # Manually handle year wrapping for dates that look like they are in the past but shouldn't be
+        # (e.g., 'Jan 02' parsed on 'Dec 31' defaults to Jan 02 of the current year, which is 364 days ago)
+        # Avoids PREFER_DATES_FROM='future' which aggressively pushes today's past times to next year.
+        from datetime import timedelta
+        now_dt = datetime.now()
+        if dt < now_dt - timedelta(days=180):
+            try:
+                dt = dt.replace(year=dt.year + 1)
+            except ValueError:
+                # Handle leap year edge case (Feb 29)
+                if dt.month == 2 and dt.day == 29:
+                    dt = dt + timedelta(days=365)
+                else:
+                    dt = dt.replace(year=dt.year + 1)
 
 
         # 6️⃣ Ensure timezone awareness and convert to UTC
