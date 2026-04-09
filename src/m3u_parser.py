@@ -135,7 +135,8 @@ class M3UParser:
         # Avoids PREFER_DATES_FROM='future' which aggressively pushes today's past times to next year.
         from datetime import timedelta
         now_dt = datetime.now()
-        if dt < now_dt - timedelta(days=180):
+        dt_naive = dt.replace(tzinfo=None)
+        if dt_naive < now_dt - timedelta(days=180):
             try:
                 dt = dt.replace(year=dt.year + 1)
             except ValueError:
