@@ -193,6 +193,331 @@ if TV_LOGOS_REPO_PATH:
 else:
     logger.info("Local tv-logos repository disabled (TV_LOGOS_REPO_PATH not set)")
 
+# Local team-logos repository path (optional, set via TEAM_LOGOS_REPO_PATH env var)
+TEAM_LOGOS_REPO_PATH = os.getenv("TEAM_LOGOS_REPO_PATH", "").strip()
+if TEAM_LOGOS_REPO_PATH:
+    original_path = TEAM_LOGOS_REPO_PATH
+    TEAM_LOGOS_REPO_PATH = os.path.abspath(TEAM_LOGOS_REPO_PATH)
+    
+    if not os.path.exists(TEAM_LOGOS_REPO_PATH):
+        logger.warning(f"TEAM_LOGOS_REPO_PATH '{TEAM_LOGOS_REPO_PATH}' (from '{original_path}') does not exist. Local repo disabled.")
+        TEAM_LOGOS_REPO_PATH = ""
+    elif not os.path.isdir(TEAM_LOGOS_REPO_PATH):
+        logger.warning(f"TEAM_LOGOS_REPO_PATH '{TEAM_LOGOS_REPO_PATH}' exists but is not a directory. Local repo disabled.")
+        TEAM_LOGOS_REPO_PATH = ""
+    else:
+        test_file = os.path.join(TEAM_LOGOS_REPO_PATH, "MLB")
+        if os.path.exists(test_file):
+            logger.info(f"✓ Local team-logos repository enabled at: {TEAM_LOGOS_REPO_PATH}")
+        else:
+            logger.warning(f"TEAM_LOGOS_REPO_PATH '{TEAM_LOGOS_REPO_PATH}' exists but doesn't appear to be team-logos repo (missing 'MLB' directory). Local repo disabled.")
+            TEAM_LOGOS_REPO_PATH = ""
+else:
+    logger.info("Local team-logos repository disabled (TEAM_LOGOS_REPO_PATH not set)")
+
+# GitHub team-logos repository URL pattern
+GITHUB_TEAM_LOGOS_RAW_BASE = "https://raw.githubusercontent.com/klunn91/team-logos/master/"
+
+# Sport to league folder mapping
+SPORT_TO_LEAGUE = {
+    "mlb": "MLB",
+    "baseball": "MLB",
+    "nba": "NBA",
+    "basketball": "NBA",
+    "nfl": "NFL",
+    "football": "NFL",
+    "ncaa": "NCAA",
+    "college": "NCAA",
+    "ncaaf": "NCAA",
+    "ncaab": "NCAA",
+    "cfb": "NCAA",
+    "cbb": "NCAA",
+    "premier league": "Premier_League",
+    "epl": "Premier_League",
+    "soccer": "Premier_League",
+    "nhl": "NHL",
+    "hockey": "NHL",
+}
+
+# Team name aliases - maps common variations to the filename in the repo
+TEAM_NAME_ALIASES = {
+    # MLB
+    "los angeles angels": "angels",
+    "la angels": "angels",
+    "anaheim angels": "angels",
+    "oakland athletics": "athletics",
+    "oakland a's": "athletics",
+    "houston astros": "astros",
+    "toronto blue jays": "blueJays",
+    "blue jays": "blueJays",
+    "atlanta braves": "braves",
+    "milwaukee brewers": "brewers",
+    "st. louis cardinals": "cardinals",
+    "st louis cardinals": "cardinals",
+    "chicago cubs": "cubs",
+    "arizona diamondbacks": "diamondbacks",
+    "d-backs": "diamondbacks",
+    "los angeles dodgers": "dodgers",
+    "la dodgers": "dodgers",
+    "san francisco giants": "giants",
+    "sf giants": "giants",
+    "cleveland guardians": "indians",
+    "cleveland indians": "indians",
+    "seattle mariners": "mariners",
+    "miami marlins": "marlins",
+    "new york mets": "mets",
+    "ny mets": "mets",
+    "washington nationals": "nationals",
+    "baltimore orioles": "orioles",
+    "san diego padres": "padres",
+    "philadelphia phillies": "phillies",
+    "pittsburgh pirates": "pirates",
+    "texas rangers": "rangers",
+    "tampa bay rays": "rays",
+    "boston red sox": "redSox",
+    "red sox": "redSox",
+    "cincinnati reds": "reds",
+    "colorado rockies": "rockies",
+    "kansas city royals": "royals",
+    "detroit tigers": "tigers",
+    "minnesota twins": "twins",
+    "chicago white sox": "whiteSox",
+    "white sox": "whiteSox",
+    "new york yankees": "yankees",
+    "ny yankees": "yankees",
+    # NBA teams
+    "los angeles lakers": "lakers",
+    "la lakers": "lakers",
+    "boston celtics": "celtics",
+    "golden state warriors": "warriors",
+    "chicago bulls": "bulls",
+    "miami heat": "heat",
+    "brooklyn nets": "nets",
+    "new york knicks": "knicks",
+    "philadelphia 76ers": "76ers",
+    "phoenix suns": "suns",
+    "dallas mavericks": "mavericks",
+    "denver nuggets": "nuggets",
+    "milwaukee bucks": "bucks",
+    "los angeles clippers": "clippers",
+    "la clippers": "clippers",
+    "houston rockets": "rockets",
+    "san antonio spurs": "spurs",
+    "utah jazz": "jazz",
+    "portland trail blazers": "trailBlazers",
+    "trail blazers": "trailBlazers",
+    "memphis grizzlies": "grizzlies",
+    "new orleans pelicans": "pelicans",
+    "oklahoma city thunder": "thunder",
+    "sacramento kings": "kings",
+    "orlando magic": "magic",
+    "indiana pacers": "pacers",
+    "detroit pistons": "pistons",
+    "cleveland cavaliers": "cavaliers",
+    "atlanta hawks": "hawks",
+    "charlotte hornets": "hornets",
+    "toronto raptors": "raptors",
+    "washington wizards": "wizards",
+    "minnesota timberwolves": "timberwolves",
+    # NFL teams (common ones)
+    "kansas city chiefs": "chiefs",
+    "san francisco 49ers": "49ers",
+    "dallas cowboys": "cowboys",
+    "new england patriots": "patriots",
+    "green bay packers": "packers",
+    "buffalo bills": "bills",
+    "philadelphia eagles": "eagles",
+    "baltimore ravens": "ravens",
+    "cincinnati bengals": "bengals",
+    "las vegas raiders": "raiders",
+    "oakland raiders": "raiders",
+    "denver broncos": "broncos",
+    "los angeles rams": "rams",
+    "la rams": "rams",
+    "los angeles chargers": "chargers",
+    "la chargers": "chargers",
+    "seattle seahawks": "seahawks",
+    "tampa bay buccaneers": "buccaneers",
+    "new york giants": "giants",
+    "ny giants": "giants",
+    "new york jets": "jets",
+    "ny jets": "jets",
+    "pittsburgh steelers": "steelers",
+    "cleveland browns": "browns",
+    "detroit lions": "lions",
+    "minnesota vikings": "vikings",
+    "chicago bears": "bears",
+    "arizona cardinals": "cardinals",
+    "atlanta falcons": "falcons",
+    "carolina panthers": "panthers",
+    "new orleans saints": "saints",
+    "indianapolis colts": "colts",
+    "jacksonville jaguars": "jaguars",
+    "tennessee titans": "titans",
+    "houston texans": "texans",
+}
+
+
+def normalize_team_name(team_name: str) -> str:
+    """
+    Normalize a team name to match the filename in the team-logos repo.
+    
+    Examples:
+        "Atlanta Braves" -> "braves"
+        "Los Angeles Angels" -> "angels"
+        "Boston Red Sox" -> "redSox"
+    
+    Args:
+        team_name: Full team name from event
+        
+    Returns:
+        Normalized team name (filename without extension)
+    """
+    if not team_name:
+        return ""
+    
+    # Convert to lowercase for matching
+    name_lower = team_name.lower().strip()
+    
+    # Check aliases first (handles full team names and variations)
+    if name_lower in TEAM_NAME_ALIASES:
+        return TEAM_NAME_ALIASES[name_lower]
+    
+    # Try to extract just the team nickname (last word usually)
+    # e.g., "Atlanta Braves" -> "braves"
+    words = name_lower.split()
+    if words:
+        # Try last word first
+        last_word = words[-1]
+        if last_word in TEAM_NAME_ALIASES:
+            return TEAM_NAME_ALIASES[last_word]
+        
+        # Try last two words joined with camelCase (e.g., "trail blazers" -> "trailBlazers")
+        if len(words) >= 2:
+            last_two = words[-2] + words[-1].capitalize()
+            if last_two in TEAM_NAME_ALIASES.values():
+                return last_two
+        
+        # Check if it's a simple team name (just the nickname)
+        # Return lowercase version
+        return last_word
+    
+    return name_lower
+
+
+def get_league_folder(sport: str) -> str | None:
+    """
+    Map a sport name to the league folder in the team-logos repo.
+    
+    Args:
+        sport: Sport name (e.g., "MLB", "NBA", "NFL", "NCAAF")
+        
+    Returns:
+        League folder name or None if not found
+    """
+    if not sport:
+        return None
+    
+    sport_lower = sport.lower().strip()
+    return SPORT_TO_LEAGUE.get(sport_lower)
+
+
+def get_team_logo_path(team_name: str, sport: str) -> str | None:
+    """
+    Get the local file path for a team logo.
+    
+    Args:
+        team_name: Team name (e.g., "Atlanta Braves")
+        sport: Sport/league (e.g., "MLB")
+        
+    Returns:
+        Local file path if found, None otherwise
+    """
+    if not TEAM_LOGOS_REPO_PATH or not team_name:
+        return None
+    
+    league = get_league_folder(sport)
+    if not league:
+        logger.debug(f"No league folder mapping for sport: {sport}")
+        return None
+    
+    normalized_name = normalize_team_name(team_name)
+    if not normalized_name:
+        return None
+    
+    # Try the normalized name first
+    logo_path = os.path.join(TEAM_LOGOS_REPO_PATH, league, f"{normalized_name}.png")
+    if os.path.exists(logo_path):
+        logger.debug(f"Found team logo at: {logo_path}")
+        return logo_path
+    
+    # Try lowercase version
+    logo_path_lower = os.path.join(TEAM_LOGOS_REPO_PATH, league, f"{normalized_name.lower()}.png")
+    if os.path.exists(logo_path_lower):
+        logger.debug(f"Found team logo at: {logo_path_lower}")
+        return logo_path_lower
+    
+    logger.debug(f"Team logo not found for {team_name} ({normalized_name}) in {league}")
+    return None
+
+
+def get_team_logo_url(team_name: str, sport: str) -> str | None:
+    """
+    Get the GitHub raw URL for a team logo.
+    
+    Args:
+        team_name: Team name (e.g., "Atlanta Braves")
+        sport: Sport/league (e.g., "MLB")
+        
+    Returns:
+        GitHub raw URL if mapping found, None otherwise
+    """
+    league = get_league_folder(sport)
+    if not league:
+        return None
+    
+    normalized_name = normalize_team_name(team_name)
+    if not normalized_name:
+        return None
+    
+    return f"{GITHUB_TEAM_LOGOS_RAW_BASE}{league}/{normalized_name}.png"
+
+
+async def fetch_team_logo(redis_store: RedisStore, team_name: str, sport: str) -> bytes | None:
+    """
+    Fetch a team logo, trying local repo first then GitHub.
+    
+    Args:
+        redis_store: Redis store for caching
+        team_name: Team name (e.g., "Atlanta Braves")
+        sport: Sport/league (e.g., "MLB")
+        
+    Returns:
+        Image bytes if found, None otherwise
+    """
+    if not team_name:
+        return None
+    
+    # Try local repo first
+    local_path = get_team_logo_path(team_name, sport)
+    if local_path:
+        content = read_local_image(local_path)
+        if content:
+            logger.info(f"✓ Using local team logo for {team_name}: {local_path}")
+            return content
+    
+    # Fall back to GitHub
+    url = get_team_logo_url(team_name, sport)
+    if url:
+        content = await fetch_image_content(redis_store, url, check_negative_cache=True)
+        if content:
+            logger.info(f"✓ Fetched team logo from GitHub for {team_name}: {url}")
+            return content
+    
+    logger.debug(f"No team logo found for {team_name} in sport {sport}")
+    return None
+
+
 # Image dimension constants
 POSTER_WIDTH = 500
 POSTER_HEIGHT = 750
@@ -1324,7 +1649,9 @@ async def process_image(
     height: int, 
     image_type: str, 
     monochrome: bool = False,
-    tvg_name: str | None = None
+    tvg_name: str | None = None,
+    event_team1: str | None = None,
+    event_sport: str | None = None
 ) -> BytesIO:
     """
     Process and resize an image for a specific use case.
@@ -1372,13 +1699,31 @@ async def process_image(
         logger.info(f"Returning cached image for {cache_key}")
         return BytesIO(cached_image)
 
-    if is_placeholder:
+    # For events with team info, try team logos first (even if URL is placeholder)
+    content = None
+    if event_team1 and event_sport:
+        logger.info(f"Event detected for {tvg_id}, trying team logo for {event_team1} ({event_sport})...")
+        team_logo_content = await fetch_team_logo(redis_store, event_team1, event_sport)
+        if team_logo_content:
+            content = team_logo_content
+            # Update cache key to reflect this is a team logo
+            team_cache_key = f"{tvg_id}_{image_type}_team_{normalize_team_name(event_team1)}"
+            cached_image = redis_store.get_processed_image(team_cache_key)
+            if cached_image:
+                logger.info(f"Returning cached team logo for {team_cache_key}")
+                return BytesIO(cached_image)
+            cache_key = team_cache_key
+
+    # If we don't have content yet and it's not a placeholder URL, try fetching
+    if not content and not is_placeholder:
+        content = await fetch_image_content(redis_store, image_url)
+    
+    # If still no content and URL is placeholder, generate placeholder
+    if not content and is_placeholder:
         logger.info(f"Generic placeholder URL detected for {tvg_id}, generating {image_type} placeholder")
         processed_image = generate_placeholder_image(title, width, height, monochrome, image_type)
         redis_store.store_processed_image(cache_key, processed_image.getvalue())
         return processed_image
-
-    content = await fetch_image_content(redis_store, image_url)
     
     # If original fetch failed and we have channel info, try fallback sources
     if not content and (tvg_id or tvg_name or title):
@@ -1557,7 +1902,15 @@ async def process_image(
         redis_store.store_processed_image(placeholder_cache_key, processed_image.getvalue())
         return processed_image
 
-async def get_poster(redis_store: RedisStore, tvg_id: str, image_url: str, title: str, tvg_name: str | None = None) -> BytesIO:
+async def get_poster(
+    redis_store: RedisStore, 
+    tvg_id: str, 
+    image_url: str, 
+    title: str, 
+    tvg_name: str | None = None,
+    event_team1: str | None = None,
+    event_sport: str | None = None
+) -> BytesIO:
     """
     Get a poster image (portrait format).
     
@@ -1567,13 +1920,26 @@ async def get_poster(redis_store: RedisStore, tvg_id: str, image_url: str, title
         image_url: URL of the image
         title: Title for placeholder if needed
         tvg_name: Channel name for fallback logo lookup (optional)
+        event_team1: First team name for events (optional)
+        event_sport: Sport/league for events (optional)
         
     Returns:
         BytesIO object containing the poster image
     """
-    return await process_image(redis_store, tvg_id, image_url, title, POSTER_WIDTH, POSTER_HEIGHT, "poster", tvg_name=tvg_name)
+    return await process_image(
+        redis_store, tvg_id, image_url, title, POSTER_WIDTH, POSTER_HEIGHT, "poster", 
+        tvg_name=tvg_name, event_team1=event_team1, event_sport=event_sport
+    )
 
-async def get_background(redis_store: RedisStore, tvg_id: str, image_url: str, title: str, tvg_name: str | None = None) -> BytesIO:
+async def get_background(
+    redis_store: RedisStore, 
+    tvg_id: str, 
+    image_url: str, 
+    title: str, 
+    tvg_name: str | None = None,
+    event_team1: str | None = None,
+    event_sport: str | None = None
+) -> BytesIO:
     """
     Get a background image (widescreen format).
     
@@ -1583,13 +1949,26 @@ async def get_background(redis_store: RedisStore, tvg_id: str, image_url: str, t
         image_url: URL of the image
         title: Title for placeholder if needed
         tvg_name: Channel name for fallback logo lookup (optional)
+        event_team1: First team name for events (optional)
+        event_sport: Sport/league for events (optional)
         
     Returns:
         BytesIO object containing the background image
     """
-    return await process_image(redis_store, tvg_id, image_url, title, BACKGROUND_WIDTH, BACKGROUND_HEIGHT, "background", tvg_name=tvg_name)
+    return await process_image(
+        redis_store, tvg_id, image_url, title, BACKGROUND_WIDTH, BACKGROUND_HEIGHT, "background", 
+        tvg_name=tvg_name, event_team1=event_team1, event_sport=event_sport
+    )
 
-async def get_logo(redis_store: RedisStore, tvg_id: str, image_url: str, title: str, tvg_name: str | None = None) -> BytesIO:
+async def get_logo(
+    redis_store: RedisStore, 
+    tvg_id: str, 
+    image_url: str, 
+    title: str, 
+    tvg_name: str | None = None,
+    event_team1: str | None = None,
+    event_sport: str | None = None
+) -> BytesIO:
     """
     Get a logo image (square format).
     
@@ -1599,13 +1978,26 @@ async def get_logo(redis_store: RedisStore, tvg_id: str, image_url: str, title: 
         image_url: URL of the image
         title: Title for placeholder if needed
         tvg_name: Channel name for fallback logo lookup (optional)
+        event_team1: First team name for events (optional)
+        event_sport: Sport/league for events (optional)
         
     Returns:
         BytesIO object containing the logo image
     """
-    return await process_image(redis_store, tvg_id, image_url, title, LOGO_WIDTH, LOGO_HEIGHT, "logo", tvg_name=tvg_name)
+    return await process_image(
+        redis_store, tvg_id, image_url, title, LOGO_WIDTH, LOGO_HEIGHT, "logo", 
+        tvg_name=tvg_name, event_team1=event_team1, event_sport=event_sport
+    )
 
-async def get_icon(redis_store: RedisStore, tvg_id: str, image_url: str, title: str, tvg_name: str | None = None) -> BytesIO:
+async def get_icon(
+    redis_store: RedisStore, 
+    tvg_id: str, 
+    image_url: str, 
+    title: str, 
+    tvg_name: str | None = None,
+    event_team1: str | None = None,
+    event_sport: str | None = None
+) -> BytesIO:
     """
     Get an icon image (square format, monochrome).
     
@@ -1615,8 +2007,13 @@ async def get_icon(redis_store: RedisStore, tvg_id: str, image_url: str, title: 
         image_url: URL of the image
         title: Title for placeholder if needed
         tvg_name: Channel name for fallback logo lookup (optional)
+        event_team1: First team name for events (optional)
+        event_sport: Sport/league for events (optional)
         
     Returns:
         BytesIO object containing the icon image (grayscale)
     """
-    return await process_image(redis_store, tvg_id, image_url, title, ICON_WIDTH, ICON_HEIGHT, "icon", monochrome=True, tvg_name=tvg_name)
+    return await process_image(
+        redis_store, tvg_id, image_url, title, ICON_WIDTH, ICON_HEIGHT, "icon", 
+        monochrome=True, tvg_name=tvg_name, event_team1=event_team1, event_sport=event_sport
+    )

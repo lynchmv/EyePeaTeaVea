@@ -38,6 +38,20 @@ RUN if [ "$CLONE_TV_LOGOS" = "true" ]; then \
         echo "Skipping tv-logos repository clone (set CLONE_TV_LOGOS=true to enable)"; \
     fi
 
+# Optional: Clone team-logos repository if CLONE_TEAM_LOGOS build arg is set
+# Usage: docker build --build-arg CLONE_TEAM_LOGOS=true -t eyepeateavea .
+ARG CLONE_TEAM_LOGOS=false
+RUN if [ "$CLONE_TEAM_LOGOS" = "true" ]; then \
+        echo "Cloning team-logos repository..."; \
+        git clone --depth 1 https://github.com/klunn91/team-logos.git /app/team-logos && \
+        echo "team-logos repository cloned successfully" && \
+        ls -la /app/team-logos | head -20 && \
+        echo "Verifying repository structure..." && \
+        test -d /app/team-logos/MLB && echo "✓ Repository structure verified" || echo "✗ Warning: Repository structure incomplete"; \
+    else \
+        echo "Skipping team-logos repository clone (set CLONE_TEAM_LOGOS=true to enable)"; \
+    fi
+
 # Expose the port the app runs on
 EXPOSE 8020
 
@@ -47,6 +61,9 @@ ENV PYTHONUNBUFFERED 1
 # Set TV_LOGOS_REPO_PATH unconditionally - the application will check if the directory exists
 # Users can override this via environment variable at runtime if needed
 ENV TV_LOGOS_REPO_PATH=/app/tv-logos
+
+# Set TEAM_LOGOS_REPO_PATH for sports team logos
+ENV TEAM_LOGOS_REPO_PATH=/app/team-logos
 
 # Run the application
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8020"]

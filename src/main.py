@@ -447,8 +447,15 @@ async def get_image_response(
         
         # Get tvg_name for fallback logo lookup
         tvg_name = channel.get("tvg_name", "")
+        
+        # Get event info for team logo lookup
+        event_team1 = channel.get("event_team1") if channel.get("is_event") else None
+        event_sport = channel.get("event_sport") if channel.get("is_event") else None
 
-        processed_image_bytes = await image_processor_func(redis_store, tvg_id, image_url, title, tvg_name=tvg_name)
+        processed_image_bytes = await image_processor_func(
+            redis_store, tvg_id, image_url, title, 
+            tvg_name=tvg_name, event_team1=event_team1, event_sport=event_sport
+        )
     if not processed_image_bytes.getvalue():
         raise HTTPException(
             status_code=500, 
@@ -460,6 +467,12 @@ async def get_image_response(
 @app.get("/")
 async def root():
     return FileResponse('frontend/index.html')
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint."""
+    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 @app.get("/{secret_str}/configure")
 async def configure_page(secret_str: str):
@@ -893,7 +906,14 @@ async def get_icon_image(secret_str: str, tvg_id: str, user_data: UserData = Dep
         
         # Get tvg_name for fallback logo lookup
         tvg_name = channel.get("tvg_name", "")
-        processed_image_bytes = await get_icon(redis_store, tvg_id, image_url, channel_name, tvg_name=tvg_name)
+        
+        # Get event info for team logo lookup
+        event_team1 = channel.get("event_team1") if channel.get("is_event") else None
+        event_sport = channel.get("event_sport") if channel.get("is_event") else None
+        processed_image_bytes = await get_icon(
+            redis_store, tvg_id, image_url, channel_name, 
+            tvg_name=tvg_name, event_team1=event_team1, event_sport=event_sport
+        )
 
     if not processed_image_bytes.getvalue():
         raise HTTPException(
