@@ -472,6 +472,25 @@ async def root():
 async def metrics():
     """Prometheus metrics endpoint."""
     from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+    
+    # Update gauge metrics before returning
+    try:
+        all_secret_strs = redis_store.get_all_secret_strs()
+        total_users = len(all_secret_strs)
+        unique_stream_urls = set()
+        for secret_str in all_secret_strs:
+            channels_dict = redis_store.get_all_channels(secret_str)
+            for channel_json in channels_dict.values():
+                try:
+                    ch = json.loads(channel_json)
+                    if ch.get("stream_url"):
+                        unique_stream_urls.add(ch["stream_url"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        update_gauge_metrics(user_count=total_users, channel_count=len(unique_stream_urls))
+    except Exception as e:
+        logger.warning(f"Failed to update gauge metrics: {e}")
+    
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 @app.get("/{secret_str}/configure")
